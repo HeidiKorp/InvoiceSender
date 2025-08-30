@@ -1,7 +1,8 @@
 import argparse
+from pathlib import Path
 
 from xls_extractor import extract_person_data
-from pdf_extractor import separate_invoices
+from pdf_extractor import separate_invoices, save_each_invoice_as_file
 
 def main():
     print("Invoice sender started.")
@@ -22,6 +23,11 @@ def main():
     print(f'\n\n')
     invoices = separate_invoices(args.invoices)
     print(f"Extracted {len(invoices)} invoices from the PDF file.")
+
+    current_path = Path(__file__).resolve().parent
+    dest = current_path / "arved"
+    save_each_invoice_as_file(invoices, dest)
+    print(f"Invoices saved to directory: {dest}")
     # print(f'-- First invoice text:\n\n{invoices[0].text}')
 
 if __name__ == "__main__":

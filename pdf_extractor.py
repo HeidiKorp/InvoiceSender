@@ -18,28 +18,37 @@ def separate_invoices(pdf_path):
     invoices = []
     for _, page in enumerate(reader.pages):
         text = page.extract_text()
-        extract_address_period_apartment(text)
-
-        # invoice = Invoice(i, text)
-        # invoices.append(invoice)
+        client_data = extract_address_period_apartment(text)
+        invoice = Invoice(page, client_data["address"], client_data["period"], client_data["apartment"])
+        invoices.append(invoice)
     return invoices
 
 # test with faulty addresses
 def extract_address_period_apartment(text):
     rows = text.splitlines()
-    address_row = [row for row in rows if "aadress" in row.lower()][0]
-    address_split = re.split(r'[:-]', address_row)
-    address = address_split[1].strip().lower() if address_split else ""
-    apartment = address_split[-1] if address_split else ""
-    print(apartment)
-    
+    address_parts = extract_parts(rows, "aadress", r'[:-]')
+    address = address_parts[1] if len(address_parts) > 1 else ""
+    apartment = address_parts[-1] if len(address_parts) > 2 else ""
+
+    period_parts = extract_parts(rows, "periood")
+    period = period_parts[1] if len(period_parts) > 1 else ""
+
+    print(f'Period: {period}, Address: {address}, Apartment: {apartment}')
+    return {"address": address, "apartment": apartment, "period": period}
 
 
-# def save_each_invoice_as_file(invoices):
+# Find row keyword, split it, return list of stripped parts
+def extract_parts(rows, keyword, pattern=r'[:\- ]+'):
+    row = next((row for row in rows if keyword in row.lower()), "")
+    return [part.strip().lower() for part in re.split(pattern, row) if part]
 
-#     for invoice in invoices:
-#         with open(f"invoice_{invoice.id}.txt", "w", encoding="utf-8") as f:
-#             f.write(invoice.text)
 
-# TODO: Save each file with the corresponding apartment number as the file name
-# To find the apartment number, search for address + " " + maj_number + "-" + apartment
+def save_each_invoice_as_file(invoices, dest):
+    invoices_dir = dest / invoices[0].address.replace(" ", "_") / invoices[0].period
+    invoices_dir.mkdir(parents=True, exist_ok=True)
+
+    for invoice in invoices:
+        writer = PdfWriter()
+        writer.add_page(invoice.page)
+        with open(invoices_dir / f'{invoice.apartment}.pdf', "wb") as f:
+            writer.write(f)

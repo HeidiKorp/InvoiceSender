@@ -17,5 +17,9 @@ Program plan:
         * Local database can be a dict at first, later a better database
 
 
+ ## Usage
+`python invoice_sender.py --clients data/kliendid.xls --invoices data/palman_aug_25.pdf`
+
+
 Notes:
 * The address in the PDF must match the one provided in the client's table
