@@ -59,17 +59,18 @@ def send_emails_with_invoices(persons, invoices_dir):
     drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
 
     for person in persons:
-        mail = outlook.CreateItem(olMailItem)
+        for i in range(len(person.emails)):
+            mail = outlook.CreateItem(olMailItem)
 
-        invoice_path = get_person_invoice(person.apartment, invoices_dir)
-        if invoice_path:
-            mail.Attachments.Add(invoice_path)
+            invoice_path = get_person_invoice(person.apartment, invoices_dir)
+            if invoice_path:
+                mail.Attachments.Add(invoice_path)
 
-        mail.To = person.emails[0]  # Send to the first valid email
-        mail.Subject = "Arve" # maybe period is needed here
-        mail.Body = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
-                    "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
-        mail.Save() # Save to Drafts
+            mail.To = person.emails[i]  # Send to the first valid email
+            mail.Subject = "Arve" # maybe period is needed here
+            mail.Body = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
+                        "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+            mail.Save() # Save to Drafts
     drafts_folder.Display()
 
 
@@ -81,3 +82,6 @@ def get_person_invoice(person_apartment, invoices_dir):
     else:
         print(f"Warning: No invoice found for apartment {person_apartment} at {invoice_path}")
         return None
+
+
+# TODO: write a function for sending all emails in drafts folder
