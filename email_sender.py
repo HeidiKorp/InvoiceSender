@@ -27,7 +27,6 @@ def ensure_outlook_ready(timeout=120):
     start = time.time()
     app = None
 
-    # print(f'Outlook path: {get_outlook_path()}')
     try:
         subprocess.Popen([get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
@@ -51,18 +50,34 @@ def ensure_outlook_ready(timeout=120):
                         "then rerun the script.")
 
 
-def get_email_details_and_send():
-    # TODO: Get actual email details
-    send_email("", "", "", None)
+def send_emails_with_invoices(persons, invoices_dir):
+    olMailItem = 0
+    olFolderDrafts = 16
 
-
-def send_email(to, subject, body, attachment_path):
     outlook = win32.Dispatch('outlook.application')
-    mail = outlook.CreateItem(0)
-    mail.To = "korpheidi@gmail.com"
-    mail.Subject = "Test email"
-    mail.Body = "Hello, this is a test email from Python!"
-    if attachment_path:
-        mail.Attachments.Add(attachment_path)
-    mail.Display()
-    # mail.Send()
+    ns = outlook.Session
+    drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
+
+    for person in persons:
+        mail = outlook.CreateItem(olMailItem)
+
+        invoice_path = get_person_invoice(person.apartment, invoices_dir)
+        if invoice_path:
+            mail.Attachments.Add(invoice_path)
+
+        mail.To = person.emails[0]  # Send to the first valid email
+        mail.Subject = "Arve" # maybe period is needed here
+        mail.Body = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
+                    "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+        mail.Save() # Save to Drafts
+    drafts_folder.Display()
+
+
+
+def get_person_invoice(person_apartment, invoices_dir):
+    invoice_path = invoices_dir / f'{person_apartment}.pdf'
+    if invoice_path.exists():
+        return str(invoice_path)
+    else:
+        print(f"Warning: No invoice found for apartment {person_apartment} at {invoice_path}")
+        return None

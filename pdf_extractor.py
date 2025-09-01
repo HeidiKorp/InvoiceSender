@@ -33,7 +33,7 @@ def extract_address_period_apartment(text):
     period_parts = extract_parts(rows, "periood")
     period = period_parts[1] if len(period_parts) > 1 else ""
 
-    print(f'Period: {period}, Address: {address}, Apartment: {apartment}')
+    # print(f'Period: {period}, Address: {address}, Apartment: {apartment}')
     return {"address": address, "apartment": apartment, "period": period}
 
 
@@ -52,3 +52,4 @@ def save_each_invoice_as_file(invoices, dest):
         writer.add_page(invoice.page)
         with open(invoices_dir / f'{invoice.apartment}.pdf', "wb") as f:
             writer.write(f)
+    return invoices_dir
