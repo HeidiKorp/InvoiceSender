@@ -37,9 +37,23 @@ def validate_files():
         return False
     return True
 
-# def get_data_ready():
 
+def get_data_ready():
+    validate_files()
+    persons = extract_person_data(clients_var.get())
+    invoices = separate_invoices(invoice_var.get())
+    print(f"Extracted {len(persons)} persons from the clients file.")
+    print(f"Extracted {len(invoices)} invoices from the PDF file.")
 
+    invoice_file_parent = Path(invoice_var.get()).resolve().parent
+    dest = invoice_file_parent / "arved"
+    messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+    invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
+
+    # Compose emails and send them
+    ensure_outlook_ready()
+    send_emails_with_invoices(persons, invoices_dir)
+    
 
 # # --- Window setup ---
 root = tb.Window(themename="superhero")
@@ -50,7 +64,7 @@ center_window(root, 600, 400)
 # --- Bottom bar with Next (right corner) ---
 bottom_bar = tb.Frame(root)
 bottom_bar.pack(fill=X, side=BOTTOM)
-tb.Button(bottom_bar, text="Järgmine", bootstyle="success", command=lambda: validate_files()).pack(side=RIGHT, padx=12, pady=12)
+tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready()).pack(side=RIGHT, padx=12, pady=12)
 
 # --- Center content ---
 content = tb.Frame(root)
