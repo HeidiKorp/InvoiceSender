@@ -50,7 +50,7 @@ def ensure_outlook_ready(timeout=120):
                         "then rerun the script.")
 
 
-def send_emails_with_invoices(persons, invoices_dir):
+def send_emails_with_invoices(persons, invoices_dir, subject, body):
     olMailItem = 0
     olFolderDrafts = 16
 
@@ -67,9 +67,8 @@ def send_emails_with_invoices(persons, invoices_dir):
                 mail.Attachments.Add(invoice_path)
 
             mail.To = person.emails[i]  # Send to the first valid email
-            mail.Subject = "Arve" # maybe period is needed here
-            mail.Body = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
-                        "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+            mail.Subject = subject # maybe period is needed here
+            mail.Body = body
             mail.Save() # Save to Drafts
     drafts_folder.Display()
 

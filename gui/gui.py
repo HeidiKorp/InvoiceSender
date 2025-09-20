@@ -7,6 +7,10 @@ from xls_extractor import extract_person_data
 from pdf_extractor import separate_invoices, save_each_invoice_as_file
 from email_sender import send_emails_with_invoices, ensure_outlook_ready
 
+DEFAULT_SUBJECT = "Arve"
+DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
+                        "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+
 
 def select_file(label):
     path = filedialog.askopenfilename(title="Vali arvete fail", filetypes=[("All files", "*.*"), ("PDF files", "*.pdf"), ("XLS files", "*.xls"), ("XLSX files", "*.xlsx")])
@@ -38,7 +42,7 @@ def validate_files():
     return True
 
 
-def get_data_ready():
+def get_data_ready(subject, body):
     validate_files()
     persons = extract_person_data(clients_var.get())
     invoices = separate_invoices(invoice_var.get())
@@ -52,7 +56,41 @@ def get_data_ready():
 
     # Compose emails and send them
     ensure_outlook_ready()
-    send_emails_with_invoices(persons, invoices_dir)
+    send_emails_with_invoices(persons, invoices_dir, subject, body)
+
+
+def open_email_editor(parent):
+    global DEFAULT_SUBJECT, DEFAULT_BODY
+    top = tb.Toplevel(parent)
+    top.title("Muuda meili malli")
+    top.transient(parent)
+    top.grab_set()
+    center_window(top, 500, 350)
+
+    # Subject
+    subject_var = tb.StringVar(value=DEFAULT_SUBJECT)
+    tb.Label(top, text="Meili teema:", bootstyle=INFO).pack(anchor="w", padx=12, pady=(12, 4))
+    tb.Entry(top, textvariable=subject_var).pack(fill=X, padx=12)
+
+    # Body
+    tb.Label(top, text="Meili sisu:", bootstyle=INFO).pack(anchor="w", padx=12, pady=(12, 4))
+    body_text = tk.Text(top, wrap=tk.WORD, height=10)
+    body_text.pack(fill=BOTH, padx=12, pady=(0, 8), expand=True)
+    body_text.insert(tk.END, DEFAULT_BODY)
+
+    # Buttons
+    btns_frame = tb.Frame(top)
+    btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
+
+    def save_and_close():
+        nonlocal subject_var, body_text
+        subject = subject_var.get()
+        body = body_text.get("1.0", tk.END).strip()
+        top.destroy()
+        get_data_ready(subject, body)
+
+    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=save_and_close).pack(side=RIGHT, padx=6)
+    tb.Button(btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy).pack(side=RIGHT, padx=6)
     
 
 # # --- Window setup ---
@@ -64,7 +102,7 @@ center_window(root, 600, 400)
 # --- Bottom bar with Next (right corner) ---
 bottom_bar = tb.Frame(root)
 bottom_bar.pack(fill=X, side=BOTTOM)
-tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready()).pack(side=RIGHT, padx=12, pady=12)
+tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: open_email_editor(root)).pack(side=RIGHT, padx=12, pady=12)
 
 # --- Center content ---
 content = tb.Frame(root)
