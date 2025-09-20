@@ -20,6 +20,9 @@ Program plan:
  ## Usage
 `python invoice_sender.py --clients data/kliendid.xls --invoices data/palman_aug_25.pdf`
 
+Use with GUI:
+In InvoiceSender:
+`python -m gui.gui`
 
 Notes:
 * The address in the PDF must match the one provided in the client's table
