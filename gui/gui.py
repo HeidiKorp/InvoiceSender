@@ -26,6 +26,7 @@ def center_window(win, width, height):
     y = (sh - height) // 2
     win.geometry(f"{width}x{height}+{x}+{y}")
 
+# TODO: Validate that each file has the correct extension and columns exist
 
 def validate_files():
     invoice_path = invoice_var.get()
