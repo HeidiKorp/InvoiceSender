@@ -22,9 +22,17 @@ def center_window(win, width, height):
     """Center a window on the screen with given width/height."""
     sw = win.winfo_screenwidth()
     sh = win.winfo_screenheight()
-    x = (sw - width) // 2
-    y = (sh - height) // 2
-    win.geometry(f"{width}x{height}+{x}+{y}")
+
+    win.minsize(width, height) # user can't shrink below this
+
+    # Enforce minimum dimensions, but also cap at screen size
+    w = max(width, min(sw, width))
+    h = max(height, min(sh, height))
+
+    x = (sw - w) // 2
+    y = (sh - h) // 2
+
+    win.geometry(f"{w}x{h}+{x}+{y}")
 
 # TODO: Validate that each file has the correct extension and columns exist
 
@@ -100,10 +108,17 @@ def main ():
     root = tb.Window(themename="superhero")
     root.title("Invoice Sender")
     root.resizable(True, True)
-    center_window(root, 600, 400)
+    center_window(root, 800, 600)
 
     invoice_var = tb.StringVar()
     clients_var = tb.StringVar()
+
+    style = tb.Style()
+
+    # Define a custom font and size
+    style.configure("TButton", font=("Helvetica", 18))
+    style.configure("success.TButton", font=("Helvetica", 18))
+    style.configure("TLabel", font=("Helvetica", 15))
 
     # --- Bottom bar with Next (right corner) ---
     bottom_bar = tb.Frame(root)
@@ -116,15 +131,15 @@ def main ():
 
     # Incoice
     btn_invoice = tb.Button(content, text="Vali arvete fail", bootstyle=INFO, command=lambda: select_file(invoice_var, [("PDF files", "*.pdf")]))
-    btn_invoice.grid(row=0, column=0, padx=12, pady=12)
-    lbl_invoice = tb.Label(content, textvariable=invoice_var, wraplength=480, foreground="#9aa0a6")
+    btn_invoice.grid(row=0, column=0, padx=22, pady=22)
+    lbl_invoice = tb.Label(content, textvariable=invoice_var, wraplength=680, foreground="#9aa0a6")
     lbl_invoice.grid(row=1, column=0, padx=12, pady=12)
 
 
     # Clients
     btn_clients = tb.Button(content, text="Vali kliendi info fail", bootstyle=INFO, command=lambda: select_file(clients_var, [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")]))
     btn_clients.grid(row=2, column=0, padx=12, pady=12)
-    lbl_clients = tb.Label(content, textvariable=clients_var, wraplength=480, foreground="#9aa0a6")
+    lbl_clients = tb.Label(content, textvariable=clients_var, wraplength=680, foreground="#9aa0a6")
     lbl_clients.grid(row=3, column=0, padx=12, pady=12)
 
     # Center the column
