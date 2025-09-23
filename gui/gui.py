@@ -12,8 +12,8 @@ DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri
                         "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
 
 
-def select_file(label):
-    path = filedialog.askopenfilename(title="Vali arvete fail", filetypes=[("All files", "*.*"), ("PDF files", "*.pdf"), ("XLS files", "*.xls"), ("XLSX files", "*.xlsx")])
+def select_file(label, filetypes):
+    path = filedialog.askopenfilename(title="Vali arvete fail", filetypes=filetypes)
     if path:
         label.set(path)
 
@@ -28,29 +28,27 @@ def center_window(win, width, height):
 
 # TODO: Validate that each file has the correct extension and columns exist
 
-def validate_files():
-    invoice_path = invoice_var.get()
-    clients_path = clients_var.get()
+def validate_files(invoice_path: str, clients_path: str):
     if not invoice_path or not clients_path:
         messagebox.showerror("Error", "Palun vali nii arvete kui klientide failid.")
-        return False
+        raise ValueError("Missing invoice file")
     if not Path(invoice_path).is_file():
         messagebox.showerror("Error", f"Arvete fail ei eksisteeri: {invoice_path}")
-        return False
+        raise ValueError("Invalid invoice path")
     if not Path(clients_path).is_file():
         messagebox.showerror("Error", f"Klientide fail ei eksisteeri: {clients_path}")
-        return False
-    return True
+        raise ValueError("Invalid clients path")
+    return invoice_path, clients_path
 
 
-def get_data_ready(subject, body):
-    validate_files()
-    persons = extract_person_data(clients_var.get())
-    invoices = separate_invoices(invoice_var.get())
+def get_data_ready(subject, body, invoice_path: str, clients_path: str):
+    validate_files(invoice_path, clients_path)
+    persons = extract_person_data(clients_path)
+    invoices = separate_invoices(invoice_path)
     print(f"Extracted {len(persons)} persons from the clients file.")
     print(f"Extracted {len(invoices)} invoices from the PDF file.")
 
-    invoice_file_parent = Path(invoice_var.get()).resolve().parent
+    invoice_file_parent = Path(invoice_path).resolve().parent
     dest = invoice_file_parent / "arved"
     messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
     invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
@@ -60,8 +58,9 @@ def get_data_ready(subject, body):
     send_emails_with_invoices(persons, invoices_dir, subject, body)
 
 
-def open_email_editor(parent):
+def open_email_editor(parent, invoice_var, clients_var):
     global DEFAULT_SUBJECT, DEFAULT_BODY
+
     top = tb.Toplevel(parent)
     top.title("Muuda meili malli")
     top.transient(parent)
@@ -83,49 +82,52 @@ def open_email_editor(parent):
     btns_frame = tb.Frame(top)
     btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
 
-    def save_and_close():
-        nonlocal subject_var, body_text
+    def save_and_close(invoice_var, clients_var, subject_var, body_widget):
+        # nonlocal subject_var, body_text
         subject = subject_var.get()
         body = body_text.get("1.0", tk.END).strip()
+        DEFAULT_BODY = body
+        DEFAULT_SUBJECT = subject
+        invoice_path, client_path = validate_files(invoice_var.get(), clients_var.get())
+        get_data_ready(subject, body, invoice_path, client_path)
         top.destroy()
-        get_data_ready(subject, body)
 
-    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=save_and_close).pack(side=RIGHT, padx=6)
+    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(invoice_var, clients_var, subject_var, body_text)).pack(side=RIGHT, padx=6)
     tb.Button(btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy).pack(side=RIGHT, padx=6)
     
+def main ():
+    # # --- Window setup ---
+    root = tb.Window(themename="superhero")
+    root.title("Invoice Sender")
+    root.resizable(True, True)
+    center_window(root, 600, 400)
 
-# # --- Window setup ---
-root = tb.Window(themename="superhero")
-root.title("Invoice Sender")
-root.resizable(True, True)
-center_window(root, 600, 400)
+    invoice_var = tb.StringVar()
+    clients_var = tb.StringVar()
 
-# --- Bottom bar with Next (right corner) ---
-bottom_bar = tb.Frame(root)
-bottom_bar.pack(fill=X, side=BOTTOM)
-tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: open_email_editor(root)).pack(side=RIGHT, padx=12, pady=12)
+    # --- Bottom bar with Next (right corner) ---
+    bottom_bar = tb.Frame(root)
+    bottom_bar.pack(fill=X, side=BOTTOM)
+    tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: open_email_editor(root, invoice_var, clients_var)).pack(side=RIGHT, padx=12, pady=12)
 
-# --- Center content ---
-content = tb.Frame(root)
-content.pack(expand=True)
+    # --- Center content ---
+    content = tb.Frame(root)
+    content.pack(expand=True)
 
-invoice_var = tb.StringVar()
-clients_var = tb.StringVar()
-
-# Incoice
-btn_invoice = tb.Button(content, text="Vali arvete fail", bootstyle=INFO, command=lambda: select_file(invoice_var))
-btn_invoice.grid(row=0, column=0, padx=12, pady=12)
-lbl_invoice = tb.Label(content, textvariable=invoice_var, wraplength=480, foreground="#9aa0a6")
-lbl_invoice.grid(row=1, column=0, padx=12, pady=12)
+    # Incoice
+    btn_invoice = tb.Button(content, text="Vali arvete fail", bootstyle=INFO, command=lambda: select_file(invoice_var, [("PDF files", "*.pdf")]))
+    btn_invoice.grid(row=0, column=0, padx=12, pady=12)
+    lbl_invoice = tb.Label(content, textvariable=invoice_var, wraplength=480, foreground="#9aa0a6")
+    lbl_invoice.grid(row=1, column=0, padx=12, pady=12)
 
 
-# Clients
-btn_clients = tb.Button(content, text="Vali kliendi info fail", bootstyle=INFO, command=lambda: select_file(clients_var))
-btn_clients.grid(row=2, column=0, padx=12, pady=12)
-lbl_clients = tb.Label(content, textvariable=clients_var, wraplength=480, foreground="#9aa0a6")
-lbl_clients.grid(row=3, column=0, padx=12, pady=12)
+    # Clients
+    btn_clients = tb.Button(content, text="Vali kliendi info fail", bootstyle=INFO, command=lambda: select_file(clients_var, [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")]))
+    btn_clients.grid(row=2, column=0, padx=12, pady=12)
+    lbl_clients = tb.Label(content, textvariable=clients_var, wraplength=480, foreground="#9aa0a6")
+    lbl_clients.grid(row=3, column=0, padx=12, pady=12)
 
-# Center the column
-content.grid_columnconfigure(0, weight=1)
+    # Center the column
+    content.grid_columnconfigure(0, weight=1)
 
-root.mainloop()
+    root.mainloop()
