@@ -12,10 +12,11 @@ DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri
                         "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
 
 
-def select_file(label, filetypes):
-    path = filedialog.askopenfilename(title="Vali arvete fail", filetypes=filetypes)
+def select_file(label, filetypes, btn_text_var, new_text):
+    path = filedialog.askopenfilename(title="Vali fail", filetypes=filetypes)
     if path:
         label.set(path)
+        btn_text_var.set(new_text)
 
 
 def center_window(win, width, height):
@@ -130,14 +131,17 @@ def main ():
     content.pack(expand=True)
 
     # Incoice
-    btn_invoice = tb.Button(content, text="Vali arvete fail", bootstyle=INFO, command=lambda: select_file(invoice_var, [("PDF files", "*.pdf")]))
+    btn_text_invoice = tk.StringVar(value="Vali arvete fail")
+    btn_text_clients = tk.StringVar(value="Vali klientide fail")
+
+    btn_invoice = tb.Button(content, textvariable=btn_text_invoice, bootstyle=INFO, command=lambda: select_file(invoice_var, [("PDF files", "*.pdf")], btn_text_invoice, "Muuda arvete faili"))
     btn_invoice.grid(row=0, column=0, padx=22, pady=22)
     lbl_invoice = tb.Label(content, textvariable=invoice_var, wraplength=680, foreground="#9aa0a6")
     lbl_invoice.grid(row=1, column=0, padx=12, pady=12)
 
 
     # Clients
-    btn_clients = tb.Button(content, text="Vali kliendi info fail", bootstyle=INFO, command=lambda: select_file(clients_var, [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")]))
+    btn_clients = tb.Button(content, textvariable=btn_text_clients, bootstyle=INFO, command=lambda: select_file(clients_var, [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")], btn_text_clients, "Muuda klientide faili"))
     btn_clients.grid(row=2, column=0, padx=12, pady=12)
     lbl_clients = tb.Label(content, textvariable=clients_var, wraplength=680, foreground="#9aa0a6")
     lbl_clients.grid(row=3, column=0, padx=12, pady=12)
