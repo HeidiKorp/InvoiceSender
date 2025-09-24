@@ -6,6 +6,7 @@ from pathlib import Path
 from xls_extractor import extract_person_data
 from pdf_extractor import separate_invoices, save_each_invoice_as_file
 from email_sender import send_emails_with_invoices, ensure_outlook_ready
+import sys
 
 DEFAULT_SUBJECT = "Arve"
 DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
@@ -50,8 +51,9 @@ def validate_files(invoice_path: str, clients_path: str):
     return invoice_path, clients_path
 
 
-def get_data_ready(subject, body, invoice_path: str, clients_path: str):
-    validate_files(invoice_path, clients_path)
+def get_data_ready(invoice_var: str, clients_var: str, template_root):
+    global DEFAULT_SUBJECT
+    invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
     persons = extract_person_data(clients_path)
     invoices = separate_invoices(invoice_path)
     print(f"Extracted {len(persons)} persons from the clients file.")
@@ -59,15 +61,33 @@ def get_data_ready(subject, body, invoice_path: str, clients_path: str):
 
     invoice_file_parent = Path(invoice_path).resolve().parent
     dest = invoice_file_parent / "arved"
+
+    # Try to create the directory (with parent, ignore if already exists)
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        messagebox.showerror("Viga", f"Kausta loomine ebaõnnestus:\n{dest}\n\n{e}")
+        sys.exit(1)
+
+    if not dest.exists() or not dest.is_dir():
+        messagebox.showerror("Viga", f"Kausta ei õnnestunud luua:\n{dest}")
+        sys.exit(1)
     messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
     invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
 
+    example_invoice = invoices[0]
+    DEFAULT_SUBJECT = "Arve " + example_invoice.period + " " + example_invoice.year
+    open_email_editor(template_root, persons, invoices_dir)
+
+
+def open_outlook(persons, invoices_dir, subject, body):
+        # TODO: Uncomment these!
     # Compose emails and send them
-    ensure_outlook_ready()
-    send_emails_with_invoices(persons, invoices_dir, subject, body)
+    # ensure_outlook_ready()
+    # send_emails_with_invoices(persons, invoices_dir, subject, body)
+    pass
 
-
-def open_email_editor(parent, invoice_var, clients_var):
+def open_email_editor(parent, persons, invoices_dir):
     global DEFAULT_SUBJECT, DEFAULT_BODY
 
     top = tb.Toplevel(parent)
@@ -105,17 +125,16 @@ def open_email_editor(parent, invoice_var, clients_var):
     btns_frame = tb.Frame(top)
     btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
 
-    def save_and_close(invoice_var, clients_var, subject_var, body_widget):
+    def save_and_close(subject_var, body_widget):
         # nonlocal subject_var, body_text
         subject = subject_var.get()
         body = body_text.get("1.0", tk.END).strip()
         DEFAULT_BODY = body
         DEFAULT_SUBJECT = subject
-        invoice_path, client_path = validate_files(invoice_var.get(), clients_var.get())
-        get_data_ready(subject, body, invoice_path, client_path)
         top.destroy()
+        open_outlook(persons, invoices_dir, subject, body)
 
-    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(invoice_var, clients_var, subject_var, body_text)).pack(side=RIGHT, padx=6)
+    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(subject_var, body_text)).pack(side=RIGHT, padx=6)
     tb.Button(btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy).pack(side=RIGHT, padx=6)
     
 def main ():
@@ -139,7 +158,7 @@ def main ():
     # --- Bottom bar with Next (right corner) ---
     bottom_bar = tb.Frame(root)
     bottom_bar.pack(fill=X, side=BOTTOM)
-    tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: open_email_editor(root, invoice_var, clients_var)).pack(side=RIGHT, padx=12, pady=12)
+    tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready(invoice_var, clients_var, root)).pack(side=RIGHT, padx=12, pady=12)
 
     # --- Center content ---
     content = tb.Frame(root)

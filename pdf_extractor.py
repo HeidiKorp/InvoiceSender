@@ -3,11 +3,12 @@ from pathlib import Path
 import re
 
 class Invoice:
-    def __init__(self, page, address, period, apartment):
+    def __init__(self, page, address, period, apartment, year):
         self.page = page
         self.address = address
         self.period = period
         self.apartment = apartment
+        self.year = year
 
     def __repr__(self):
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
@@ -19,7 +20,7 @@ def separate_invoices(pdf_path):
     for _, page in enumerate(reader.pages):
         text = page.extract_text()
         client_data = extract_address_period_apartment(text)
-        invoice = Invoice(page, client_data["address"], client_data["period"], client_data["apartment"])
+        invoice = Invoice(page, client_data["address"], client_data["period"], client_data["apartment"], client_data["year"])
         invoices.append(invoice)
     return invoices
 
@@ -33,8 +34,10 @@ def extract_address_period_apartment(text):
     period_parts = extract_parts(rows, "periood")
     period = period_parts[1] if len(period_parts) > 1 else ""
 
+    year = extract_parts(rows, "kuupäev", pattern=r'[:\-\. ]+')[-1]
+
     # print(f'Period: {period}, Address: {address}, Apartment: {apartment}')
-    return {"address": address, "apartment": apartment, "period": period}
+    return {"address": address, "apartment": apartment, "period": period, "year": year}
 
 
 # Find row keyword, split it, return list of stripped parts
