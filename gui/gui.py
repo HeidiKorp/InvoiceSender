@@ -74,17 +74,31 @@ def open_email_editor(parent, invoice_var, clients_var):
     top.title("Muuda meili malli")
     top.transient(parent)
     top.grab_set()
-    center_window(top, 500, 350)
+
+    center_window(top, 600, 450)
+
+    style = tb.Style()
+    style.configure("info.TLabel", font=("Helvetica", 15))
 
     # Subject
     subject_var = tb.StringVar(value=DEFAULT_SUBJECT)
     tb.Label(top, text="Meili teema:", bootstyle=INFO).pack(anchor="w", padx=12, pady=(12, 4))
-    tb.Entry(top, textvariable=subject_var).pack(fill=X, padx=12)
+    tb.Entry(top, textvariable=subject_var, font=("Helvetica", 15)).pack(fill=X, padx=12)
 
     # Body
     tb.Label(top, text="Meili sisu:", bootstyle=INFO).pack(anchor="w", padx=12, pady=(12, 4))
-    body_text = tk.Text(top, wrap=tk.WORD, height=10)
-    body_text.pack(fill=BOTH, padx=12, pady=(0, 8), expand=True)
+    
+    # Text + scrollbar in a frame that stretches
+    body_frame = tb.Frame(top)
+    body_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+    body_text = tk.Text(body_frame, wrap=tk.WORD, font=("Helvetica", 15), height=10)
+    body_text.pack(side="left", fill="both", expand=True)
+
+    yscroll = tb.Scrollbar(body_frame, orient="vertical", command=body_text.yview)
+    yscroll.pack(side="right", fill="y")
+    body_text.configure(yscrollcommand=yscroll.set)
+
     body_text.insert(tk.END, DEFAULT_BODY)
 
     # Buttons
@@ -120,6 +134,7 @@ def main ():
     style.configure("TButton", font=("Helvetica", 18))
     style.configure("success.TButton", font=("Helvetica", 18))
     style.configure("TLabel", font=("Helvetica", 15))
+    style.configure("info.TLabel", font=("Helvetica", 15))
 
     # --- Bottom bar with Next (right corner) ---
     bottom_bar = tb.Frame(root)
