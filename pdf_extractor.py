@@ -1,6 +1,8 @@
 from pypdf import PdfReader, PdfWriter
+import pandas as pd
 from pathlib import Path
 import re
+from xls_extractor import ValidationError
 
 class Invoice:
     def __init__(self, page, address, period, apartment, year):
@@ -34,15 +36,18 @@ def extract_address_period_apartment(text):
     period_parts = extract_parts(rows, "periood")
     period = period_parts[1] if len(period_parts) > 1 else ""
 
+    for i in rows:
+        print(i)
     year = extract_parts(rows, "kuupäev", pattern=r'[:\-\. ]+')[-1]
 
-    # print(f'Period: {period}, Address: {address}, Apartment: {apartment}')
     return {"address": address, "apartment": apartment, "period": period, "year": year}
 
 
 # Find row keyword, split it, return list of stripped parts
 def extract_parts(rows, keyword, pattern=r'[:\- ]+'):
-    row = next((row for row in rows if keyword in row.lower()), "")
+    row = next((row for row in rows if keyword in row.lower()), None)
+    if row is None:
+        raise ValidationError(f"Keyword '{keyword}' not found in rows")
     return [part.strip().lower() for part in re.split(pattern, row) if part]
 
 

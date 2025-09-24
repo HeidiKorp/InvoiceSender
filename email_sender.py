@@ -5,6 +5,8 @@ from pathlib import Path
 from pywintypes import com_error
 import shutil
 import winreg
+from xls_extractor import ValidationError
+from collections import Counter
 
 def get_outlook_path():
     try:
@@ -50,7 +52,51 @@ def ensure_outlook_ready(timeout=120):
                         "then rerun the script.")
 
 
+def apartments_from_persons(persons):
+    return {str(p.apartment).strip() for p in persons if str(p.apartment).strip()}
+
+
+def apartments_from_invoices(invoices_dir, exts={".pdf"}):
+    counts = Counter()
+    for p in Path(invoices_dir).iterdir():
+        if p.is_file() and p.suffix.lower() in exts:
+            apt = p.stem.strip()
+            if apt:
+                counts[apt] += 1
+    return counts
+
+
+def validate_persons_vs_invoices(persons, invoices_dir):
+    person_apts = apartments_from_persons(persons)
+    invoice_counts = apartments_from_invoices(invoices_dir)
+    invoice_apts = set(invoice_counts.keys())
+
+    # Who's missing an invoice?
+    missing_for_people = sorted(person_apts - invoice_apts, key=str)
+
+    # Invoices that don't match any pattern
+    extra_invoices = sorted(invoice_apts - person_apts, key=str)
+
+    # Duplicates (same apartment has >1 file)
+    duplicates = sorted([apt for apt, c in invoice_counts.items() if c > 1], key=str)
+
+    problems = []
+    if missing_for_people:
+        problems.append(f"Puuduvad arved korteritele: {', '.join(missing_for_people)}.")
+    if extra_invoices:
+        problems.append(f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}.")
+    if duplicates:
+        problems.append(f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.")
+
+    print(f'Problems: {problems}')
+    if problems:
+        raise ValidationError(" ".join(problems))
+
+
 def send_emails_with_invoices(persons, invoices_dir, subject, body):
+    # Validate *before* creating drafts
+    validate_persons_vs_invoices(persons, invoices_dir)
+    
     olMailItem = 0
     olFolderDrafts = 16
 
@@ -66,10 +112,15 @@ def send_emails_with_invoices(persons, invoices_dir, subject, body):
             if invoice_path:
                 mail.Attachments.Add(invoice_path)
 
+            if not invoice_path:
+                # Should not happen now, but guard anyway
+                raise ValidationError(f"Arvet ei leitud korterile: {person.apartment}")
+
             mail.To = person.emails[i]  # Send to the first valid email
             mail.Subject = subject # maybe period is needed here
             mail.Body = body
             mail.Save() # Save to Drafts
+    
     drafts_folder.Display()
 
 
