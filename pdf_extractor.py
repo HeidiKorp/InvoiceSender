@@ -2,12 +2,17 @@ from pypdf import PdfReader, PdfWriter
 import pandas as pd
 from pathlib import Path
 import re
-import fitz
-import io
-from PIL import Image
+import io, gc, fitz, logging
+from PIL import Image, ImageOps, ImageFilter
 from xls_extractor import ValidationError
 import pytesseract
+from pytesseract import TesseractError
 
+
+logging.basicConfig(
+    level=logging.INFO,                # 👈 enables INFO and above
+    format='[%(levelname)s] %(message)s'
+)
 
 class Invoice:
     def __init__(self, page, address, period, apartment, year):
@@ -20,23 +25,116 @@ class Invoice:
     def __repr__(self):
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
 
-def ocr_pdf_all_pages(pdf_path: str, lang: str = "est", dpi: int = 300) -> list[str]:
+def ocr_pdf_all_pages(
+    pdf_path: str, 
+    lang: str = "est", 
+    dpi: int = 300,
+    tesseract_cmd: str | None = None,
+    psm: int = 6,
+    oem: int = 1,
+    timeout_sec: int = 120
+    ) -> list[str]:
     """
     OCR a single page from an open fitz.Document (PyMuPDF).
     Returns extracted text (may be empty).
     """
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
     texts: list[str] = []
-    doc = fitz.open(pdf_path)
+    scale = dpi / 72  # 72 is the default resolution
+    matrix = fitz.Matrix(scale, scale)
 
     try:
-        for page in doc:
-            pix = page.get_pixmap(dpi=dpi, alpha=False)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            text = pytesseract.image_to_string(img, lang=lang) or ""
-            texts.append(text)
-    finally:
-        doc.close()
-    return texts
+        pytesseract.get_languages(config='')
+        if lang not in pytesseract.get_languages(config=''):
+            logging.warning(
+                f"'{lang}' language data not found in Tesseract. "
+                "Install it (e.g., 'tesseract-ocr-est') for best results."
+            )
+    except Exception as e:
+        pass
+
+    ocr_config = f"--oem {oem} --psm {psm}"
+    with fitz.open(pdf_path) as doc:
+        for i, page in enumerate(doc, start=1):
+            logging.info(f"OCR processing page {i}/{doc.page_count} of '{pdf_path}'")
+            img = None
+            pix = None
+            try:
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                png_bytes = pix.tobytes("png")
+
+                # PIL load
+                img = Image.open(io.BytesIO(png_bytes))
+
+                # Preprocess: grayscale -> slight denoise -> autocontrast -> binarize
+                img = img.convert("L")  # Grayscale\
+                img = img.filter(ImageFilter.MedianFilter(size=3))  # Denoise
+                img = ImageOps.autocontrast(img, cutoff=1)  # Autocontrast
+
+                # Binarize 
+                img = img.point(lambda x: 255 if x > 180 else 0, mode='1')
+
+                # OCR with timeout so a single page can't block the whole process
+                text = pytesseract.image_to_string(
+                    img, lang=lang, config=ocr_config, timeout=timeout_sec
+                    ) or ""
+                texts.append(text)
+            except TesseractError as e:
+                # Show stderr from tesseract - helpful for missing lang and bad params
+                logging.error(f"Tesseract failed on page {i}: {e}\n{getattr(e, 'stderr', '')}")
+                texts.append("") # Append empty text on error
+            except RuntimeError as e:
+                # pytesseract timeout raises RuntimeError
+                if "Timeout" in str(e):
+                    logging.error(f"OCR timeout on page {i} of '{pdf_path}' after {timeout_sec} seconds")
+                else:
+                    raise
+
+            except Exception as e:
+                logging.error(f"Unexpected error on page {i} of '{pdf_path}': {e}")
+                texts.append("")
+            finally:
+                try:
+                    if img is not None:
+                        img.close()
+                except Exception:
+                    pass
+            
+                if "png_bytes" in locals():
+                    del png_bytes
+                del pix
+                gc.collect()
+        return texts
+            
+    # try:
+    #     doc = fitz.open(pdf_path)
+    # except Exception as e:
+    #     raise ValidationError(f"Failed to open PDF file '{pdf_path}': {e}")
+    # print(f"Opened PDF '{pdf_path}' with {doc.page_count} pages.")
+
+    # try:
+    #     if lang not in pytesseract.get_languages(config=''):
+    #         print(
+    #             f"'{lang}' language data not found in Tesseract. "
+    #             "Install it (e.g., 'tesseract-ocr-est') for best results."
+    #         )
+    #     else:
+    #         logging.info(f"Using Tesseract language: {lang}")
+    # except Exception as e:
+    #     print(f"Error checking Tesseract languages: {e}")
+
+    # try:
+    #     for page in doc:
+
+    #         pix = page.get_pixmap(dpi=dpi, alpha=False)
+    #         img = Image.open(io.BytesIO(pix.tobytes("png")))
+    #         text = pytesseract.image_to_string(img, lang=lang) or ""
+    #         texts.append(text)
+    # finally:
+    #     doc.close()
+    # return texts
 
 
 # Only splity the files here, extract information in another function
