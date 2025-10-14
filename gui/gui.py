@@ -67,6 +67,9 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
         messagebox.showerror("Viga", str(e))
         return
 
+    # Show status bar
+    parent.status_bar.pack(fill=X, side=BOTTOM)
+
     # Reset status UI
     parent.status_label.config(text="Alustan...")
     parent.page_progress.config(value=0, mode="determinate")
@@ -121,6 +124,9 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
                 invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
                 parent.on_folder_created(str(invoices_dir))
                 open_email_editor(template_root, persons, invoices_dir)
+
+                # Hide status bar again
+                parent.status_bar.pack_forget()
 
             parent.after(0, show_message_and_then_open)
 
@@ -254,6 +260,9 @@ def main ():
 
     root.page_progress.pack(side=LEFT, fill=X, expand=True, padx=(10, 12), pady=8)
 
+    # Hide status bar initially
+    status_bar.pack_forget()
+    root.status_bar = status_bar # store reference on root so we can show/hide later 
 
     root.invoices_dir_var = tb.StringVar(value="")
     btn_delete_invoices = tb.Button(bottom_bar, text="Kustuta arvekaust", bootstyle=DANGER, command=lambda: delete_folder(root, root.invoices_dir_var.get()))
