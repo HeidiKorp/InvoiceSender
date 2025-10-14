@@ -32,7 +32,9 @@ def ocr_pdf_all_pages(
     tesseract_cmd: str | None = None,
     psm: int = 6,
     oem: int = 1,
-    timeout_sec: int = 120
+    timeout_sec: int = 120,
+    on_progress=None, # callback: on_progress(page_number: int, total_pages: int)
+    cancel_flag=None # optional threading.Event to signal cancellation
     ) -> list[str]:
     """
     OCR a single page from an open fitz.Document (PyMuPDF).
@@ -58,6 +60,17 @@ def ocr_pdf_all_pages(
     ocr_config = f"--oem {oem} --psm {psm}"
     with fitz.open(pdf_path) as doc:
         for i, page in enumerate(doc, start=1):
+            if cancel_flag and cancel_flag.is_set():
+                logging.info("OCR process cancelled by user.")
+                break
+
+            if on_progress:
+                try:
+                    on_progress(i, doc.page_count)
+                except Exception:
+                    pass
+
+
             logging.info(f"OCR processing page {i}/{doc.page_count} of '{pdf_path}'")
             img = None
             pix = None
@@ -107,43 +120,18 @@ def ocr_pdf_all_pages(
                 del pix
                 gc.collect()
         return texts
-            
-    # try:
-    #     doc = fitz.open(pdf_path)
-    # except Exception as e:
-    #     raise ValidationError(f"Failed to open PDF file '{pdf_path}': {e}")
-    # print(f"Opened PDF '{pdf_path}' with {doc.page_count} pages.")
-
-    # try:
-    #     if lang not in pytesseract.get_languages(config=''):
-    #         print(
-    #             f"'{lang}' language data not found in Tesseract. "
-    #             "Install it (e.g., 'tesseract-ocr-est') for best results."
-    #         )
-    #     else:
-    #         logging.info(f"Using Tesseract language: {lang}")
-    # except Exception as e:
-    #     print(f"Error checking Tesseract languages: {e}")
-
-    # try:
-    #     for page in doc:
-
-    #         pix = page.get_pixmap(dpi=dpi, alpha=False)
-    #         img = Image.open(io.BytesIO(pix.tobytes("png")))
-    #         text = pytesseract.image_to_string(img, lang=lang) or ""
-    #         texts.append(text)
-    # finally:
-    #     doc.close()
-    # return texts
 
 
 # Only splity the files here, extract information in another function
-def separate_invoices(pdf_path):
+def separate_invoices(pdf_path, on_progress=None):
     """
     OCRib kogu PDF-i ja kasutab saadud teksti sinu olemasoleva parseriga.
     Säilitab sinu varasema 'Invoice(page, ...)' signatuuri, andes kaasa pypdf page-objekti.
     """
-    page_texts = ocr_pdf_all_pages(pdf_path, "est", dpi=300)
+    if on_progress:
+        page_texts = ocr_pdf_all_pages(pdf_path, "est", dpi=300, on_progress=on_progress)
+    else:
+        page_texts = ocr_pdf_all_pages(pdf_path, "est", dpi=300)
     reader = PdfReader(pdf_path)
 
     if len(page_texts) != len(reader.pages):

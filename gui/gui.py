@@ -3,7 +3,8 @@ from ttkbootstrap.constants import *
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
-import sys
+from pdf_extractor import ocr_pdf_all_pages
+import sys, threading, os
 import shutil
 
 from ttkbootstrap.style import Bootstyle
@@ -60,37 +61,78 @@ def validate_files(invoice_path: str, clients_path: str):
 
 def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
     global DEFAULT_SUBJECT
-    invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
     try:
-        persons = extract_person_data(clients_path)
-        invoices = separate_invoices(invoice_path)
+        invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
     except ValidationError as e:
         messagebox.showerror("Viga", str(e))
         return
 
-    print(f"Extracted {len(persons)} persons from the clients file.")
-    print(f"Extracted {len(invoices)} invoices from the PDF file.")
+    # Reset status UI
+    parent.status_label.config(text="Alustan...")
+    parent.page_progress.config(value=0, mode="determinate")
 
-    invoice_file_parent = Path(invoice_path).resolve().parent
-    dest = invoice_file_parent / "arved"
+    def worker():
+        try:
+            # 1) Extract people (fast, stays here)
+            persons = extract_person_data(clients_path)
 
-    # Try to create the directory (with parent, ignore if already exists)
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        messagebox.showerror("Viga", f"Kausta loomine ebaõnnestus:\n{dest}\n\n{e}")
-        sys.exit(1)
+            # 2) OCR read-through (emits per-page progress)
+            fname = os.path.basename(invoice_path)
 
-    if not dest.exists() or not dest.is_dir():
-        messagebox.showerror("Viga", f"Kausta ei õnnestunud luua:\n{dest}")
-        sys.exit(1)
-    messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
-    invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
-    parent.on_folder_created(str(invoices_dir))
+            def on_progress(page_number, total_pages):
+                pct = int(page_number / total_pages * 100) if total_pages else 0
+                parent.after(0, lambda: (
+                    parent.page_progress.config(value=pct),
+                    parent.status_label.configure(text=f"PDF leht {page_number}/{total_pages} - {fname}")
+                ))
 
-    example_invoice = invoices[0]
-    DEFAULT_SUBJECT = "Arve " + example_invoice.period + " " + example_invoice.year
-    open_email_editor(template_root, persons, invoices_dir)
+            invoices = separate_invoices(invoice_path, on_progress=on_progress)            
+            
+            # 3) Continue processing (back in main thread)
+            parent.after(0, lambda: parent.status_label.configure(text="Töötlen andmeid..."))
+
+            invoice_file_parent = Path(invoice_path).resolve().parent
+            dest = invoice_file_parent / "arved"
+
+            # Try to create the directory (with parent, ignore if already exists)
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                parent.after(0, lambda: messagebox.showerror("Viga", f"Kausta loomine ebaõnnestus:\n{dest}\n\n{e}"))
+                # sys.exit(1)
+                return
+
+            if not dest.exists() or not dest.is_dir():
+                parent.after(0, lambda: messagebox.showerror("Viga", f"Kausta ei õnnestunud luua:\n{dest}"))
+                # sys.exit(1)
+                return
+
+            example_invoice = invoices[0]
+            DEFAULT_SUBJECT = "Arve " + example_invoice.period + " " + example_invoice.year
+
+            def show_message_and_then_open():
+                parent.page_progress.configure(value=100)
+                parent.status_label.configure(text="Valmis")
+
+                # This blocks until the user clicks OK
+                messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+
+                # After OK -> open the email editor
+                invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
+                parent.on_folder_created(str(invoices_dir))
+                open_email_editor(template_root, persons, invoices_dir)
+
+            parent.after(0, show_message_and_then_open)
+
+        except ValidationError as e:
+            parent.after(0, lambda: messagebox.showerror("Viga", str(e)))
+        except Exception as e:
+            parent.after(0, lambda: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{e}"))
+        finally:
+            parent.status_label.config(text="Valmis")
+            parent.page_progress.config(value=0, mode="determinate")
+
+    threading.Thread(target=worker, daemon=True).start()        
 
 
 def open_outlook(persons, invoices_dir, subject, body):
@@ -200,6 +242,19 @@ def main ():
     bottom_bar.pack(fill=X, side=BOTTOM)
     tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready(root, invoice_var, clients_var, root)).pack(side=RIGHT, padx=12, pady=12)
     
+    # --- Status bar (bottom, above the button row) ---
+    status_bar = tb.Frame(root)
+    status_bar.pack(fill=X, side=BOTTOM)
+
+    root.status_label = tb.Label(status_bar, text="Valmis", bootstyle=INFO)
+    root.status_label.pack(side=LEFT, padx=10, pady=8)
+
+    root.page_progress = tb.Progressbar(status_bar, orient="horizontal", mode="determinate", 
+        maximum=100, bootstyle=INFO)
+
+    root.page_progress.pack(side=LEFT, fill=X, expand=True, padx=(10, 12), pady=8)
+
+
     root.invoices_dir_var = tb.StringVar(value="")
     btn_delete_invoices = tb.Button(bottom_bar, text="Kustuta arvekaust", bootstyle=DANGER, command=lambda: delete_folder(root, root.invoices_dir_var.get()))
 
@@ -244,7 +299,5 @@ def main ():
 
     # Center the column
     content.grid_columnconfigure(0, weight=1)
-
-
 
     root.mainloop()
