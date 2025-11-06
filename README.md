@@ -22,7 +22,10 @@ Program plan:
 
 Use with GUI:
 In InvoiceSender:
-`python -m gui.gui`
+`python -m run_app`
+
+Create an exe:
+`pyinstaller --noconsole --onefile run_app.py`
 
 Notes:
 * The address in the PDF must match the one provided in the client's table
