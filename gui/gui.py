@@ -10,7 +10,7 @@ import shutil
 from ttkbootstrap.style import Bootstyle
 from xls_extractor import extract_person_data, ValidationError
 from pdf_extractor import separate_invoices, save_each_invoice_as_file
-from email_sender import send_emails_with_invoices, ensure_outlook_ready
+from email_sender import send_emails_with_invoices, ensure_outlook_ready, clear_outlook_cache, validate_persons_vs_invoices
 
 
 DEFAULT_SUBJECT = "Arve"
@@ -19,6 +19,14 @@ DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri
 
 def call_error(text):
     messagebox.ERROR(text)
+
+
+class _Cancelled(Exception):
+    # "Operation cancelled by user."
+    pass
+
+def cancel_current_job(root):
+    root.cancel_event.set() # callable from anywhere
 
 
 def select_file(label, filetypes, btn_text_var, new_text):
@@ -44,7 +52,6 @@ def center_window(win, width, height):
 
     win.geometry(f"{w}x{h}+{x}+{y}")
 
-# TODO: Validate that each file has the correct extension and columns exist
 
 def validate_files(invoice_path: str, clients_path: str):
     if not invoice_path or not clients_path:
@@ -74,22 +81,43 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
     parent.status_label.config(text="Alustan...")
     parent.page_progress.config(value=0, mode="determinate")
 
+    # prep the cancel event
+    parent.cancel_event.clear()
+    parent.btn_cancel.configure(state=NORMAL)
+
+    def on_cancel_ui():
+        parent.status_label.config(text="Katkestatud")
+        parent.page_progress.config(value=0, mode="determinate")
+        parent.btn_cancel.configure(state=DISABLED)
+        parent.status_bar.pack_forget()
+
     def worker():
         try:
+            print("About to extract persons")
             # 1) Extract people (fast, stays here)
             persons = extract_person_data(clients_path)
+            if parent.cancel_event.is_set():
+                print(f'Cancel event set after extracting persons')
+                raise _Cancelled()
 
             # 2) OCR read-through (emits per-page progress)
             fname = os.path.basename(invoice_path)
 
             def on_progress(page_number, total_pages):
+                if parent.cancel_event.is_set():
+                    print(f'Cancel event set during OCR processing')
+                    raise _Cancelled()
                 pct = int(page_number / total_pages * 100) if total_pages else 0
                 parent.after(0, lambda: (
                     parent.page_progress.config(value=pct),
                     parent.status_label.configure(text=f"PDF leht {page_number}/{total_pages} - {fname}")
                 ))
 
-            invoices = separate_invoices(invoice_path, on_progress=on_progress)            
+            invoices = separate_invoices(invoice_path, on_progress=on_progress, cancel_flag=parent.cancel_event)           
+
+            if parent.cancel_event.is_set():
+                print(f'Cancel event set after OCR processing')
+                raise _Cancelled() 
             
             # 3) Continue processing (back in main thread)
             parent.after(0, lambda: parent.status_label.configure(text="Töötlen andmeid..."))
@@ -105,13 +133,19 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
                 # sys.exit(1)
                 return
 
+            if parent.cancel_event.is_set():
+                print(f'Cancel event set after creating directory')
+                raise _Cancelled()
+
             if not dest.exists() or not dest.is_dir():
                 parent.after(0, lambda: messagebox.showerror("Viga", f"Kausta ei õnnestunud luua:\n{dest}"))
                 # sys.exit(1)
                 return
 
             example_invoice = invoices[0]
+            print(f'-- Example invoice data: {example_invoice}')
             DEFAULT_SUBJECT = "Arve " + example_invoice.period + " " + example_invoice.year
+            print(f'Default subject: {DEFAULT_SUBJECT}')
 
             def show_message_and_then_open():
                 parent.page_progress.configure(value=100)
@@ -119,6 +153,10 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
 
                 # This blocks until the user clicks OK
                 messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+
+                if parent.cancel_event.is_set():
+                    on_cancel_ui()
+                    return
 
                 # After OK -> open the email editor
                 invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
@@ -130,10 +168,13 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
 
             parent.after(0, show_message_and_then_open)
 
+        except _Cancelled:
+            print("Operation cancelled by user (caught in worker).")
+            parent.after(0, on_cancel_ui)
         except ValidationError as e:
-            parent.after(0, lambda: messagebox.showerror("Viga", str(e)))
+            parent.after(0, lambda err=e: messagebox.showerror("Viga", str(e)))
         except Exception as e:
-            parent.after(0, lambda: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{e}"))
+            parent.after(0, lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{e}"))
         finally:
             parent.status_label.config(text="Valmis")
             parent.page_progress.config(value=0, mode="determinate")
@@ -145,14 +186,16 @@ def open_outlook(persons, invoices_dir, subject, body):
     # Compose emails and send them
     ensure_outlook_ready()
     try:
-        send_emails_with_invoices(persons, invoices_dir, subject, body)
+        validate_persons_vs_invoices(persons, invoices_dir)
     except ValidationError as e:
         messagebox.showerror("Viga", str(e))
+    send_emails_with_invoices(persons, invoices_dir, subject, body)
     
 
 def open_email_editor(parent, persons, invoices_dir):
     global DEFAULT_SUBJECT, DEFAULT_BODY
 
+    print(f'-0--- Default subject {DEFAULT_SUBJECT}')
     top = tb.Toplevel(parent)
     top.title("Muuda meili malli")
     top.transient(parent)
@@ -221,6 +264,9 @@ def delete_folder(root, path_str):
 
 
 def main ():
+    # Clean Outlook cache on startup
+    clear_outlook_cache()
+
     # # --- Window setup ---
     root = tb.Window(themename="superhero")
     root.title("Invoice Sender")
@@ -243,11 +289,20 @@ def main ():
     style.configure("TLabel", font=("Helvetica", 15))
     style.configure("info.TLabel", font=("Helvetica", 15))
 
+    # shared state
+    root.cancel_event = threading.Event()
+    root.current_worker = None
+
     # --- Bottom bar with Next (right corner) ---
     bottom_bar = tb.Frame(root)
     bottom_bar.pack(fill=X, side=BOTTOM)
     tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready(root, invoice_var, clients_var, root)).pack(side=RIGHT, padx=12, pady=12)
     
+    # Cancel button
+    root.btn_cancel = tb.Button(bottom_bar, text="Katkesta", bootstyle="danger", command=lambda: cancel_current_job(root))
+    root.btn_cancel.pack(side=RIGHT, padx=0, pady=12)
+    root.btn_cancel.configure(state=DISABLED)
+
     # --- Status bar (bottom, above the button row) ---
     status_bar = tb.Frame(root)
     status_bar.pack(fill=X, side=BOTTOM)

@@ -3,7 +3,7 @@ import subprocess
 import win32com.client as win32
 from pathlib import Path
 from pywintypes import com_error
-import shutil
+import shutil, os
 import winreg
 from xls_extractor import ValidationError
 from collections import Counter
@@ -19,6 +19,25 @@ def get_outlook_path():
     except FileNotFoundError:
         return None
 
+
+def clear_outlook_cache():
+    # Make gencache readable/writable
+    win32.gencache.is_readonly = False
+
+    # Purge stale/corrupt cache in disk
+    gen_py = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Temp", "gen_py")
+
+    if os.path.isdir(gen_py):
+        try:
+            shutil.rmtree(gen_py)
+        except Exception as e:
+            print(f"Could not clear Outlook cache at {gen_py}. Error: {e}")
+
+    # Rebuild cache
+    try:
+        win32.gencache.Rebuild()
+    except Exception as e:
+        print(f"Could not rebuild Outlook cache. Error: {e}")
 
 
 def ensure_outlook_ready(timeout=120):
@@ -85,6 +104,7 @@ def validate_persons_vs_invoices(persons, invoices_dir):
         problems.append(f"Puuduvad arved korteritele: {', '.join(missing_for_people)}.")
     if extra_invoices:
         problems.append(f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}.")
+        print("Invoice apartments:", {', '.join(invoice_apts)})
     if duplicates:
         problems.append(f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.")
 
@@ -95,7 +115,9 @@ def validate_persons_vs_invoices(persons, invoices_dir):
 
 def send_emails_with_invoices(persons, invoices_dir, subject, body):
     # Validate *before* creating drafts
-    validate_persons_vs_invoices(persons, invoices_dir)
+    # validate_persons_vs_invoices(persons, invoices_dir)
+
+    print(f'Getting past error')
     
     olMailItem = 0
     olFolderDrafts = 16

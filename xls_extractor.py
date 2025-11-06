@@ -17,7 +17,7 @@ class Person:
         self.emails = split_emails(email)
 
     def __repr__(self):
-        return f"Person({self.first_name} {self.last_name}, \nemails={self.emails}, \naddress={self.address})"
+        return f"Person(\nemails={self.emails}, \naddress={self.address}, \napartment={self.apartment}\n)"
 
 
 def read_xls_with_fallback(path):
@@ -82,11 +82,14 @@ def extract_person_data(input_file):
     if missing:
         raise ValidationError("Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust.")
 
+    print(f'Getting her~!')
     persons = []
     for _, row in df.iterrows():
         email = str(row['klient_mail']).strip()
         apt = str(row['korter']).strip()
         address = str(row['yhistu']).strip().lower() + " " + str(row['maj_nr']).strip()
+
+        print(f'Processing row: email={email}, apt={apt}, address={address}')
 
         # --- Row-level checks
         if not RE_NUM.match(apt):

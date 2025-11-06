@@ -29,6 +29,8 @@ def main():
     invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
     print(f"Invoices saved to directory: {dest}")
 
+    print(f'Persons: {persons}')
+
     # Compose emails and send them
     ensure_outlook_ready()
     send_emails_with_invoices(persons, invoices_dir)
