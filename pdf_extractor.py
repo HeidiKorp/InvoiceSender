@@ -94,7 +94,6 @@ def ocr_pdf_all_pages(
                     img, lang=lang, config=ocr_config, timeout=timeout_sec
                     ) or ""
                 texts.append(text)
-                # print(f'{text}\n')  # Print first 30 chars of OCR result for debugging
             except TesseractError as e:
                 # Show stderr from tesseract - helpful for missing lang and bad params
                 logging.error(f"Tesseract failed on page {i}: {e}\n{getattr(e, 'stderr', '')}")
@@ -146,7 +145,6 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
                 f"PDF faili '{pdf_path}' leheküljelt {idx} ei õnnestunud teksti lugeda ka pärast OCR-i. "
                 "PDF võib olla vigane.")
         client_data = extract_address_period_apartment(text)
-        # print(f' -- extracted data: {client_data}')
         invoice = Invoice(page, client_data["address"], client_data["period"], client_data["apartment"], client_data["year"])
         invoices.append(invoice)
     return invoices
@@ -155,10 +153,8 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
 def extract_address_period_apartment(text):
     rows = text.splitlines()
     address_parts = extract_parts(rows, "aadress", r'[:-]')
-    # print(f'Address parts: {address_parts}')
     address = address_parts[1] if len(address_parts) > 1 else ""
     apartment = address_parts[-1] if len(address_parts) > 2 else ""
-    # print(f'Apartment extracted: {apartment}')
 
     period_parts = extract_parts(rows, "periood")
     period = period_parts[1] if len(period_parts) > 1 else ""

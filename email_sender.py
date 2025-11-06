@@ -104,21 +104,14 @@ def validate_persons_vs_invoices(persons, invoices_dir):
         problems.append(f"Puuduvad arved korteritele: {', '.join(missing_for_people)}.")
     if extra_invoices:
         problems.append(f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}.")
-        print("Invoice apartments:", {', '.join(invoice_apts)})
     if duplicates:
         problems.append(f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.")
 
-    print(f'Problems: {problems}')
     if problems:
         raise ValidationError(" ".join(problems))
 
 
 def send_emails_with_invoices(persons, invoices_dir, subject, body):
-    # Validate *before* creating drafts
-    # validate_persons_vs_invoices(persons, invoices_dir)
-
-    print(f'Getting past error')
-    
     olMailItem = 0
     olFolderDrafts = 16
 

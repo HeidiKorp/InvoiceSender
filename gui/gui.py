@@ -13,9 +13,9 @@ from pdf_extractor import separate_invoices, save_each_invoice_as_file
 from email_sender import send_emails_with_invoices, ensure_outlook_ready, clear_outlook_cache, validate_persons_vs_invoices
 
 
-DEFAULT_SUBJECT = "Arve"
-DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
-                        "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+# DEFAULT_SUBJECT = "Arve"
+# DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
+#                         "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
 
 def call_error(text):
     messagebox.ERROR(text)
@@ -66,8 +66,8 @@ def validate_files(invoice_path: str, clients_path: str):
     return invoice_path, clients_path
 
 
-def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
-    global DEFAULT_SUBJECT
+def get_data_ready(parent, invoice_var: str, clients_var: str, template_root, subject, body):
+    # global DEFAULT_SUBJECT
     try:
         invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
     except ValidationError as e:
@@ -93,7 +93,6 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
 
     def worker():
         try:
-            print("About to extract persons")
             # 1) Extract people (fast, stays here)
             persons = extract_person_data(clients_path)
             if parent.cancel_event.is_set():
@@ -143,9 +142,7 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
                 return
 
             example_invoice = invoices[0]
-            print(f'-- Example invoice data: {example_invoice}')
-            DEFAULT_SUBJECT = "Arve " + example_invoice.period + " " + example_invoice.year
-            print(f'Default subject: {DEFAULT_SUBJECT}')
+            subject = "Arve " + example_invoice.period + " " + example_invoice.year
 
             def show_message_and_then_open():
                 parent.page_progress.configure(value=100)
@@ -161,7 +158,7 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root):
                 # After OK -> open the email editor
                 invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
                 parent.on_folder_created(str(invoices_dir))
-                open_email_editor(template_root, persons, invoices_dir)
+                open_email_editor(template_root, persons, invoices_dir, subject, body)
 
                 # Hide status bar again
                 parent.status_bar.pack_forget()
@@ -192,10 +189,11 @@ def open_outlook(persons, invoices_dir, subject, body):
     send_emails_with_invoices(persons, invoices_dir, subject, body)
     
 
-def open_email_editor(parent, persons, invoices_dir):
-    global DEFAULT_SUBJECT, DEFAULT_BODY
+def open_email_editor(parent, persons, invoices_dir, subject, body):
+    # global DEFAULT_SUBJECT, DEFAULT_BODY
 
-    print(f'-0--- Default subject {DEFAULT_SUBJECT}')
+    parent.btn_cancel.configure(state=DISABLED)
+
     top = tb.Toplevel(parent)
     top.title("Muuda meili malli")
     top.transient(parent)
@@ -207,7 +205,7 @@ def open_email_editor(parent, persons, invoices_dir):
     style.configure("info.TLabel", font=("Helvetica", 15))
 
     # Subject
-    subject_var = tb.StringVar(value=DEFAULT_SUBJECT)
+    subject_var = tb.StringVar(value=subject)
     tb.Label(top, text="Meili teema:", bootstyle=INFO).pack(anchor="w", padx=12, pady=(12, 4))
     tb.Entry(top, textvariable=subject_var, font=("Helvetica", 15)).pack(fill=X, padx=12)
 
@@ -225,21 +223,21 @@ def open_email_editor(parent, persons, invoices_dir):
     yscroll.pack(side="right", fill="y")
     body_text.configure(yscrollcommand=yscroll.set)
 
-    body_text.insert(tk.END, DEFAULT_BODY)
+    body_text.insert(tk.END, body)
 
     # Buttons
     btns_frame = tb.Frame(top)
     btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
 
-    def save_and_close(subject_var):
-        subject = subject_var.get()
-        body = body_text.get("1.0", tk.END).strip()
-        DEFAULT_BODY = body
-        DEFAULT_SUBJECT = subject
+    def save_and_close(subject_var, subject, body):
+        subject_val = subject_var.get()
+        body_val = body_text.get("1.0", tk.END).strip()
+        body = body_val
+        subject = subject_val
         top.destroy()
-        open_outlook(persons, invoices_dir, subject, body)
+        open_outlook(persons, invoices_dir, subject_val, body_val)
 
-    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(subject_var)).pack(side=RIGHT, padx=6)
+    tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(subject_var, subject, body)).pack(side=RIGHT, padx=6)
     tb.Button(btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy).pack(side=RIGHT, padx=6)
 
 
@@ -266,6 +264,11 @@ def delete_folder(root, path_str):
 def main ():
     # Clean Outlook cache on startup
     clear_outlook_cache()
+
+    # Set up default subject, body
+    subject = "Arve"
+    body = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
+                        "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
 
     # # --- Window setup ---
     root = tb.Window(themename="superhero")
@@ -296,7 +299,7 @@ def main ():
     # --- Bottom bar with Next (right corner) ---
     bottom_bar = tb.Frame(root)
     bottom_bar.pack(fill=X, side=BOTTOM)
-    tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready(root, invoice_var, clients_var, root)).pack(side=RIGHT, padx=12, pady=12)
+    tb.Button(bottom_bar, text="Koosta meilid", bootstyle="success", command=lambda: get_data_ready(root, invoice_var, clients_var, root, subject, body)).pack(side=RIGHT, padx=12, pady=12)
     
     # Cancel button
     root.btn_cancel = tb.Button(bottom_bar, text="Katkesta", bootstyle="danger", command=lambda: cancel_current_job(root))

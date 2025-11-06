@@ -82,14 +82,11 @@ def extract_person_data(input_file):
     if missing:
         raise ValidationError("Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust.")
 
-    print(f'Getting her~!')
     persons = []
     for _, row in df.iterrows():
         email = str(row['klient_mail']).strip()
         apt = str(row['korter']).strip()
         address = str(row['yhistu']).strip().lower() + " " + str(row['maj_nr']).strip()
-
-        print(f'Processing row: email={email}, apt={apt}, address={address}')
 
         # --- Row-level checks
         if not RE_NUM.match(apt):
