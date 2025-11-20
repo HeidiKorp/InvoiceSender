@@ -6,16 +6,56 @@ from pathlib import Path
 from pdf_extractor import ocr_pdf_all_pages
 import sys, threading, os
 import shutil
+import traceback
+import pytesseract
 
 from ttkbootstrap.style import Bootstyle
 from xls_extractor import extract_person_data, ValidationError
-from pdf_extractor import separate_invoices, save_each_invoice_as_file
+from pdf_extractor import separate_invoices, save_each_invoice_as_file, check_ocr_environment
 from email_sender import send_emails_with_invoices, ensure_outlook_ready, clear_outlook_cache, validate_persons_vs_invoices
 
 
-# DEFAULT_SUBJECT = "Arve"
-# DEFAULT_BODY = ("Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri " 
-#                         "kuu kulude arve. See on automaatteavitus, palume mitte vastata.")
+def get_log_path():
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "error.log")
+
+def log_exc_triple(exc_type, exc_value, exc_tb):
+    # Write errors to a log file next to the exe, even in PyInstaller
+    log_path = get_log_path()
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("=== Exception ===\n")
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+    except Exception:
+        pass
+
+sys.excepthook = log_exc_triple
+
+def _thread_excepthook(args):
+    log_exc_triple(args.exc_type, args.exc_value, args.exc_traceback)
+
+
+def log_exception(e: Exception):
+    exc_type = type(e)
+    exc_value = e
+    exc_tb = e.__traceback__
+    log_exc_triple(exc_type, exc_value, exc_tb)
+
+
+def delete_old_error_log():
+    log_path = get_log_path()
+    if os.path.exists(log_path):
+        try:
+            os.remove(log_path)
+        except Exception:
+            # If deletion fails, overwrite instead of crash
+            open(log_path, "w").close()
+
+
+threading.excepthook = _thread_excepthook
 
 def call_error(text):
     messagebox.ERROR(text)
@@ -112,7 +152,11 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root, su
                     parent.status_label.configure(text=f"PDF leht {page_number}/{total_pages} - {fname}")
                 ))
 
-            invoices = separate_invoices(invoice_path, on_progress=on_progress, cancel_flag=parent.cancel_event)           
+            try:
+                invoices = separate_invoices(invoice_path, on_progress=on_progress, cancel_flag=parent.cancel_event)      
+            except pytesseract.TesseractError as e:
+                log_exception(e)
+                parent.after(0, lambda: messagebox.showerror("Viga", f"Tesseract OCR viga:\n{e}"))     
 
             if parent.cancel_event.is_set():
                 print(f'Cancel event set after OCR processing')
@@ -145,35 +189,43 @@ def get_data_ready(parent, invoice_var: str, clients_var: str, template_root, su
             subject = "Arve " + example_invoice.period + " " + example_invoice.year
 
             def show_message_and_then_open():
-                parent.page_progress.configure(value=100)
-                parent.status_label.configure(text="Valmis")
+                try: 
+                    parent.page_progress.configure(value=100)
+                    parent.status_label.configure(text="Valmis")
 
-                # This blocks until the user clicks OK
-                messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+                    # This blocks until the user clicks OK
+                    messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
 
-                if parent.cancel_event.is_set():
-                    on_cancel_ui()
-                    return
+                    if parent.cancel_event.is_set():
+                        on_cancel_ui()
+                        return
 
-                # After OK -> open the email editor
-                invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
-                parent.on_folder_created(str(invoices_dir))
-                open_email_editor(template_root, persons, invoices_dir, subject, body)
+                    # After OK -> open the email editor
+                    invoices_dir = save_each_invoice_as_file(invoices, dest) # returns the full folder path to all individual invoices
+                    parent.on_folder_created(str(invoices_dir))
+                    open_email_editor(template_root, persons, invoices_dir, subject, body)
 
-                # Hide status bar again
-                parent.status_bar.pack_forget()
+                    # Hide status bar again
+                    parent.status_bar.pack_forget()
+                except Exception as e:
+                    log_exception(e)
+                    try:
+                        call_error(f"Töö ebaõnnestus:\n{e}")
+                    except:
+                        pass
 
             parent.after(0, show_message_and_then_open)
 
         except _Cancelled:
             print("Operation cancelled by user (caught in worker).")
             parent.after(0, on_cancel_ui)
+            log_exception(_Cancelled("Operation cancelled by user."))
         except ValidationError as e:
-            parent.after(0, lambda err=e: messagebox.showerror("Viga", str(e)))
+            parent.after(0, lambda err=e: messagebox.showerror("Viga", str(err)))
         except Exception as e:
-            parent.after(0, lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{e}"))
+            parent.after(0, lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"))
         finally:
-            parent.status_label.config(text="Valmis")
+            # parent.status_label.config(text="Valmis")
             parent.page_progress.config(value=0, mode="determinate")
 
     threading.Thread(target=worker, daemon=True).start()        
@@ -261,7 +313,7 @@ def delete_folder(root, path_str):
     root.hide_delete_button()
 
 
-def main ():
+def main():
     # Clean Outlook cache on startup
     clear_outlook_cache()
 
@@ -272,6 +324,28 @@ def main ():
 
     # # --- Window setup ---
     root = tb.Window(themename="superhero")
+
+    delete_old_error_log()
+
+    if not check_ocr_environment():
+        messagebox.showerror(
+            "Tesseract puudub",
+            "Tesseract OCR ei ole selles arvutis paigaldatud või ei leitud teekonda.\n\n"
+            "Palun paigalda Tesseract OCR ja proovi uuesti."
+        )
+        root.destroy()
+
+    def tk_report_callback_exception(exc_type, exc_value, exc_tb):
+        # Log it
+        log_exc_triple(exc_type, exc_value, exc_tb)
+        # Also show a more user-friendly error
+        messagebox.showerror(
+            "Viga",
+            f"Kasutajaliidese viga:\n{exc_type.__name__}: {exc_value}"
+        )
+
+    root.report_callback_exception = tk_report_callback_exception
+
     root.title("Invoice Sender")
     root.resizable(True, True)
     center_window(root, 800, 600)

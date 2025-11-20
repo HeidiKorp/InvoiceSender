@@ -2,11 +2,11 @@ from pypdf import PdfReader, PdfWriter
 import pandas as pd
 from pathlib import Path
 import re
-import io, gc, fitz, logging
+import io, gc, fitz, logging, sys, os
 from PIL import Image, ImageOps, ImageFilter
 from xls_extractor import ValidationError
 import pytesseract
-from pytesseract import TesseractError
+import traceback
 
 
 logging.basicConfig(
@@ -25,6 +25,26 @@ class Invoice:
     def __repr__(self):
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
 
+def get_tesseract_cmd():
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(__file__)
+        
+    return os.path.join(base_dir, "_internal", "tesseract", "tesseract.exe")
+
+def get_log_path():
+    # same dir as exe
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "error.log")
+
+def log_line(msg: str):
+    with open(get_log_path(), "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
+
 def ocr_pdf_all_pages(
     pdf_path: str, 
     lang: str = "est", 
@@ -40,8 +60,20 @@ def ocr_pdf_all_pages(
     OCR a single page from an open fitz.Document (PyMuPDF).
     Returns extracted text (may be empty).
     """
-    if tesseract_cmd:
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    if tesseract_cmd is None:
+        tesseract_cmd = get_tesseract_cmd()
+
+    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+    log_line(f"Using tesseract_cmd={pytesseract.pytesseract.tesseract_cmd}")
+
+    try:
+        version = pytesseract.get_tesseract_version()
+        log_line(f"Tesseract version={version}")
+        langs = pytesseract.get_languages(config="")
+        log_line(f"Tesseract languages={langs}")
+    except Exception as e:
+        log_line(f"Error querying Tesseract env: {e}")
 
     texts: list[str] = []
     scale = dpi / 72  # 72 is the default resolution
@@ -94,10 +126,15 @@ def ocr_pdf_all_pages(
                     img, lang=lang, config=ocr_config, timeout=timeout_sec
                     ) or ""
                 texts.append(text)
-            except TesseractError as e:
+            except pytesseract.TesseractError as e:
                 # Show stderr from tesseract - helpful for missing lang and bad params
                 logging.error(f"Tesseract failed on page {i}: {e}\n{getattr(e, 'stderr', '')}")
+                stderr = getattr(e, "stderr", "")
+                if stderr:
+                    log_line("--- Tesseract stderr ---")
+                    log_line(stderr)
                 texts.append("") # Append empty text on error
+                
             except RuntimeError as e:
                 # pytesseract timeout raises RuntimeError
                 if "Timeout" in str(e):
@@ -107,6 +144,7 @@ def ocr_pdf_all_pages(
 
             except Exception as e:
                 logging.error(f"Unexpected error on page {i} of '{pdf_path}': {e}")
+                log_line(traceback.format_exc())
                 texts.append("")
             finally:
                 try:
@@ -122,12 +160,43 @@ def ocr_pdf_all_pages(
         return texts
 
 
+def check_ocr_environment():
+    try:
+        v = pytesseract.get_tesseract_version()
+    except Exception as e:
+        messagebox.showerror(
+            "Tesseract puudub",
+            "Tesseract OCR ei ole selles arvutis paigaldatud või ei leitud teekonda.\n\n"
+            f"Viga: {e}"
+        )
+        return False
+
+    try:
+        langs = pytesseract.get_languages(config="")
+    except Exception as e:
+        messagebox.showerror(
+            "Tesseract viga",
+            f"Tesseract on paigaldatud (versioon {v}), aga keelte nimekirja ei saanud lugeda.\n\nViga: {e}"
+        )
+        return False
+
+    if "est" not in langs:
+        messagebox.showerror(
+            "Puuduv keel",
+            "Tesseract OCR on paigaldatud, kuid 'est' (eesti) keeleandmed puuduvad.\n\n"
+            "Paigalda Tesseract'i eesti keele toetus."
+        )
+        return False
+
+    return True
+
 # Only splity the files here, extract information in another function
 def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
     """
     OCRib kogu PDF-i ja kasutab saadud teksti sinu olemasoleva parseriga.
     Säilitab sinu varasema 'Invoice(page, ...)' signatuuri, andes kaasa pypdf page-objekti.
     """
+    print(on_progress)
     if on_progress:
         page_texts = ocr_pdf_all_pages(pdf_path, "est", dpi=300, on_progress=on_progress, cancel_flag=cancel_flag)
     else:
@@ -140,7 +209,8 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
     invoices = []
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):       
         rows = (text or "").splitlines()
-        if not rows:
+        if len(text.strip()) == 0:
+            log_line(f"SEPARATE_INVOICES: EMPTY text for page {idx} of '{pdf_path}'")
             raise ValidationError(
                 f"PDF faili '{pdf_path}' leheküljelt {idx} ei õnnestunud teksti lugeda ka pärast OCR-i. "
                 "PDF võib olla vigane.")
