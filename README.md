@@ -25,7 +25,8 @@ In InvoiceSender:
 `python -m run_app`
 
 Create an exe:
-`pyinstaller --noconsole --onefile run_app.py`
+`rm -rf build dist *.spec`
+`pyinstaller --onedir --noconsole --name ArveteSaatja   --paths .   --add-data "tesseract:tesseract" run_app.py`
 
 Notes:
 * The address in the PDF must match the one provided in the client's table
