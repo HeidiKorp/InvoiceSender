@@ -7,6 +7,7 @@ import shutil, os
 import winreg
 from xls_extractor import ValidationError
 from collections import Counter
+from error_logging import log_exception
 
 def get_outlook_path():
     try:
@@ -31,13 +32,13 @@ def clear_outlook_cache():
         try:
             shutil.rmtree(gen_py)
         except Exception as e:
-            print(f"Could not clear Outlook cache at {gen_py}. Error: {e}")
+            log_exception(e)
 
     # Rebuild cache
     try:
         win32.gencache.Rebuild()
     except Exception as e:
-        print(f"Could not rebuild Outlook cache. Error: {e}")
+        log_exception(e)
 
 
 def ensure_outlook_ready(timeout=120):
@@ -111,7 +112,7 @@ def validate_persons_vs_invoices(persons, invoices_dir):
         raise ValidationError(" ".join(problems))
 
 
-def send_emails_with_invoices(persons, invoices_dir, subject, body):
+def save_emails_with_invoices(persons, invoices_dir, subject, body):
     olMailItem = 0
     olFolderDrafts = 16
 
@@ -134,9 +135,48 @@ def send_emails_with_invoices(persons, invoices_dir, subject, body):
             mail.To = person.emails[i]  # Send to the first valid email
             mail.Subject = subject # maybe period is needed here
             mail.Body = body
+            mail.Categories = "ArveteSaatja"
             mail.Save() # Save to Drafts
     
     drafts_folder.Display()
+
+
+def send_drafts(parent):
+    olFolderDrafts = 16
+
+    outlook = win32.Dispatch('outlook.application')
+    ns = outlook.Session
+
+    try:
+        explorer = outlook.ActiveExplorer()
+        explorer.ClearSelection()
+    except Exception:
+        pass
+
+    drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
+
+    messages = drafts_folder.Items
+    to_send_ids = []
+
+    for i in range(1, messages.Count + 1):
+        message = messages.Item(i)
+        if "ArveteSaatja" in message.Categories:
+            to_send_ids.append((message.EntryID, drafts_folder.StoreID))
+
+    sent_count = 0
+
+    for entry_id, store_id in to_send_ids:
+        try:
+            message = ns.GetItemFromID(entry_id, store_id)
+            message.Send()
+            sent_count += 1
+        except Exception as e:
+            log_exception(e)
+            print(f"Could not retrieve message with EntryID {entry_id}. Error: {e}")
+            continue
+
+    print(f"Sent {sent_count} emails from Drafts.")
+    parent.hide_send_drafts_button()
 
 
 

@@ -25,14 +25,6 @@ class Invoice:
     def __repr__(self):
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
 
-def get_tesseract_cmd():
-    if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(__file__)
-        
-    return os.path.join(base_dir, "_internal", "tesseract", "tesseract.exe")
-
 def get_log_path():
     # same dir as exe
     if getattr(sys, "frozen", False):
@@ -49,7 +41,6 @@ def ocr_pdf_all_pages(
     pdf_path: str, 
     lang: str = "est", 
     dpi: int = 300,
-    tesseract_cmd: str | None = None,
     psm: int = 6,
     oem: int = 1,
     timeout_sec: int = 120,
@@ -60,20 +51,8 @@ def ocr_pdf_all_pages(
     OCR a single page from an open fitz.Document (PyMuPDF).
     Returns extracted text (may be empty).
     """
-    if tesseract_cmd is None:
-        tesseract_cmd = get_tesseract_cmd()
 
-    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
-
-    log_line(f"Using tesseract_cmd={pytesseract.pytesseract.tesseract_cmd}")
-
-    try:
-        version = pytesseract.get_tesseract_version()
-        log_line(f"Tesseract version={version}")
-        langs = pytesseract.get_languages(config="")
-        log_line(f"Tesseract languages={langs}")
-    except Exception as e:
-        log_line(f"Error querying Tesseract env: {e}")
+    # log_line(f"Using tesseract_cmd={pytesseract.pytesseract.tesseract_cmd}")
 
     texts: list[str] = []
     scale = dpi / 72  # 72 is the default resolution
@@ -159,36 +138,6 @@ def ocr_pdf_all_pages(
                 gc.collect()
         return texts
 
-
-def check_ocr_environment():
-    try:
-        v = pytesseract.get_tesseract_version()
-    except Exception as e:
-        messagebox.showerror(
-            "Tesseract puudub",
-            "Tesseract OCR ei ole selles arvutis paigaldatud või ei leitud teekonda.\n\n"
-            f"Viga: {e}"
-        )
-        return False
-
-    try:
-        langs = pytesseract.get_languages(config="")
-    except Exception as e:
-        messagebox.showerror(
-            "Tesseract viga",
-            f"Tesseract on paigaldatud (versioon {v}), aga keelte nimekirja ei saanud lugeda.\n\nViga: {e}"
-        )
-        return False
-
-    if "est" not in langs:
-        messagebox.showerror(
-            "Puuduv keel",
-            "Tesseract OCR on paigaldatud, kuid 'est' (eesti) keeleandmed puuduvad.\n\n"
-            "Paigalda Tesseract'i eesti keele toetus."
-        )
-        return False
-
-    return True
 
 # Only splity the files here, extract information in another function
 def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):

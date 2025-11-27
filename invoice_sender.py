@@ -3,7 +3,7 @@ from pathlib import Path
 
 from xls_extractor import extract_person_data
 from pdf_extractor import separate_invoices, save_each_invoice_as_file
-from email_sender import send_emails_with_invoices, ensure_outlook_ready
+from email_sender import save_emails_with_invoices, ensure_outlook_ready
 
 def main():
     print("Invoice sender started.")
@@ -33,7 +33,7 @@ def main():
 
     # Compose emails and send them
     ensure_outlook_ready()
-    send_emails_with_invoices(persons, invoices_dir)
+    save_emails_with_invoices(persons, invoices_dir)
     
 
 

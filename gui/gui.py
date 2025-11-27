@@ -3,7 +3,7 @@ from ttkbootstrap.constants import *
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
-from pdf_extractor import ocr_pdf_all_pages
+from pdf_extractor import ocr_pdf_all_pages, log_line
 import sys, threading, os
 import shutil
 import traceback
@@ -11,48 +11,51 @@ import pytesseract
 
 from ttkbootstrap.style import Bootstyle
 from xls_extractor import extract_person_data, ValidationError
-from pdf_extractor import separate_invoices, save_each_invoice_as_file, check_ocr_environment
-from email_sender import send_emails_with_invoices, ensure_outlook_ready, clear_outlook_cache, validate_persons_vs_invoices
+from pdf_extractor import separate_invoices, save_each_invoice_as_file
+from email_sender import save_emails_with_invoices, ensure_outlook_ready, clear_outlook_cache, validate_persons_vs_invoices, send_drafts
+from error_logging import log_exc_triple, log_exception, delete_old_error_log, _thread_excepthook
 
 
-def get_log_path():
+def get_tesseract_cmd():
     if getattr(sys, "frozen", False):
         base_dir = os.path.dirname(sys.executable)
+        return os.path.join(base_dir, "_internal", "tesseract", "tesseract.exe")
     else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "error.log")
+        base_dir = shutil.which("tesseract")
+        return base_dir
+        
 
-def log_exc_triple(exc_type, exc_value, exc_tb):
-    # Write errors to a log file next to the exe, even in PyInstaller
-    log_path = get_log_path()
+def check_ocr_environment():
     try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write("=== Exception ===\n")
-            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
-    except Exception:
-        pass
+        v = pytesseract.get_tesseract_version()
+        log_line(f"Tesseract version={v}")
+    except Exception as e:
+        log_exception(e)
+        messagebox.showerror(
+            "Tesseract puudub",
+            "Tesseract OCR ei ole selles arvutis paigaldatud või ei leitud teekonda.\n\n"
+            f"Viga: {e}"
+        )
+        return False
 
-sys.excepthook = log_exc_triple
+    try:
+        langs = pytesseract.get_languages(config="")
+    except Exception as e:
+        messagebox.showerror(
+            "Tesseract viga",
+            f"Tesseract on paigaldatud (versioon {v}), aga keelte nimekirja ei saanud lugeda.\n\nViga: {e}"
+        )
+        return False
 
-def _thread_excepthook(args):
-    log_exc_triple(args.exc_type, args.exc_value, args.exc_traceback)
+    if "est" not in langs:
+        messagebox.showerror(
+            "Puuduv keel",
+            "Tesseract OCR on paigaldatud, kuid 'est' (eesti) keeleandmed puuduvad.\n\n"
+            "Paigalda Tesseract'i eesti keele toetus."
+        )
+        return False
 
-
-def log_exception(e: Exception):
-    exc_type = type(e)
-    exc_value = e
-    exc_tb = e.__traceback__
-    log_exc_triple(exc_type, exc_value, exc_tb)
-
-
-def delete_old_error_log():
-    log_path = get_log_path()
-    if os.path.exists(log_path):
-        try:
-            os.remove(log_path)
-        except Exception:
-            # If deletion fails, overwrite instead of crash
-            open(log_path, "w").close()
+    return True
 
 
 threading.excepthook = _thread_excepthook
@@ -238,7 +241,7 @@ def open_outlook(persons, invoices_dir, subject, body):
         validate_persons_vs_invoices(persons, invoices_dir)
     except ValidationError as e:
         messagebox.showerror("Viga", str(e))
-    send_emails_with_invoices(persons, invoices_dir, subject, body)
+    save_emails_with_invoices(persons, invoices_dir, subject, body)
     
 
 def open_email_editor(parent, persons, invoices_dir, subject, body):
@@ -251,6 +254,7 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     top.transient(parent)
     top.grab_set()
 
+    top.update_idletasks()
     center_window(top, 600, 450)
 
     style = tb.Style()
@@ -288,6 +292,7 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
         subject = subject_val
         top.destroy()
         open_outlook(persons, invoices_dir, subject_val, body_val)
+        parent.on_emails_saved()
 
     tb.Button(btns_frame, text="Salvesta", bootstyle=SUCCESS, command=lambda: save_and_close(subject_var, subject, body)).pack(side=RIGHT, padx=6)
     tb.Button(btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy).pack(side=RIGHT, padx=6)
@@ -327,6 +332,10 @@ def main():
 
     delete_old_error_log()
 
+    pytesseract.pytesseract.tesseract_cmd = get_tesseract_cmd()
+
+    print(f'Using tesseract version={pytesseract.get_tesseract_version()}')
+
     if not check_ocr_environment():
         messagebox.showerror(
             "Tesseract puudub",
@@ -334,6 +343,7 @@ def main():
             "Palun paigalda Tesseract OCR ja proovi uuesti."
         )
         root.destroy()
+        return
 
     def tk_report_callback_exception(exc_type, exc_value, exc_tb):
         # Log it
@@ -361,8 +371,8 @@ def main():
     style = tb.Style()
 
     # Define a custom font and size
-    style.configure("TButton", font=("Helvetica", 18))
-    style.configure("success.TButton", font=("Helvetica", 18))
+    style.configure("TButton", font=("Helvetica", 15))
+    style.configure("success.TButton", font=("Helvetica", 15))
     style.configure("TLabel", font=("Helvetica", 15))
     style.configure("info.TLabel", font=("Helvetica", 15))
 
@@ -417,6 +427,24 @@ def main():
 
     root.on_folder_created = on_folder_created
     root.hide_delete_button = hide_delete_button
+
+    # --- Send drafts button
+    btn_send_drafts = tb.Button(bottom_bar, text="Saada mustandid", bootstyle=SUCCESS ,command=lambda: send_drafts(root))
+    root.btn_send_drafts = btn_send_drafts
+
+    def on_emails_saved():
+        if not getattr(root, "_send_drafts_packed", False):
+            root.btn_send_drafts.pack(side=RIGHT, padx=(0, 12), pady=12)
+            root._send_drafts_packed = True
+
+    def hide_send_drafts_button():
+        if getattr(root, "_send_drafts_packed", False):
+            root.btn_send_drafts.pack_forget()
+            root._send_drafts_packed = False
+    
+    root.on_emails_saved = on_emails_saved
+    root.hide_send_drafts_button = hide_send_drafts_button
+
 
     # --- Center content ---
     content = tb.Frame(root)
