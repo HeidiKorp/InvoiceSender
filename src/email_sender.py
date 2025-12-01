@@ -5,9 +5,10 @@ from pathlib import Path
 from pywintypes import com_error
 import shutil, os
 import winreg
-from xls_extractor import ValidationError
 from collections import Counter
-from error_logging import log_exception
+
+from utils.logging_helper import log_exception
+from src.xls_extractor import ValidationError
 
 def get_outlook_path():
     try:

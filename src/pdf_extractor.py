@@ -4,9 +4,10 @@ from pathlib import Path
 import re
 import io, gc, fitz, logging, sys, os
 from PIL import Image, ImageOps, ImageFilter
-from xls_extractor import ValidationError
 import pytesseract
 import traceback
+
+from src.xls_extractor import ValidationError
 
 
 logging.basicConfig(
@@ -24,18 +25,6 @@ class Invoice:
 
     def __repr__(self):
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
-
-def get_log_path():
-    # same dir as exe
-    if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, "error.log")
-
-def log_line(msg: str):
-    with open(get_log_path(), "a", encoding="utf-8") as f:
-        f.write(msg + "\n")
 
 def ocr_pdf_all_pages(
     pdf_path: str, 

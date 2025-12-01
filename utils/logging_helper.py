@@ -1,13 +1,7 @@
 import os, sys
 import traceback
 
-
-def get_log_path():
-    if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "error.log")
+from utils.file_utils import get_log_path
 
 def log_exc_triple(exc_type, exc_value, exc_tb):
     # Write errors to a log file next to the exe, even in PyInstaller
@@ -40,3 +34,7 @@ def delete_old_error_log():
         except Exception:
             # If deletion fails, overwrite instead of crash
             open(log_path, "w").close()
+
+def log_line(msg: str):
+    with open(get_log_path(), "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
