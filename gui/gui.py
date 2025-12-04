@@ -1,37 +1,21 @@
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 from pathlib import Path
-# from pdf_extractor import ocr_pdf_all_pages, log_line
-import sys, threading, os
-import shutil
-import traceback
+import threading, os
 import pytesseract
-
 from ttkbootstrap.style import Bootstyle
-from src.xls_extractor import extract_person_data, ValidationError
-# from pdf_extractor import separate_invoices, save_each_invoice_as_file
+
 from src.email_sender import clear_outlook_cache, send_drafts
 from utils.logging_helper import (
     log_exc_triple,
-    log_exception,
     delete_old_error_log,
     _thread_excepthook,
 )
 from utils.file_utils import delete_folder
 from utils.ocr_helper import get_tesseract_cmd, check_ocr_environment
-from utils.gui_helpers import (
-    select_file,
-    center_window,
-    validate_files,
-    get_data_ready,
-    open_outlook,
-    open_email_editor,
-    call_error,
-    _Cancelled,
-    cancel_current_job,
-)
+from utils.gui_helpers import select_file, center_window, cancel_current_job, get_data_ready
 
 
 threading.excepthook = _thread_excepthook
@@ -48,15 +32,16 @@ def main():
         "kuu kulude arve. See on automaatteavitus, palume mitte vastata."
     )
 
-    # # --- Window setup ---
+    # --- Start window setup ---
     root = tb.Window(themename="superhero")
 
+    # --- Pre setup checks ---
     delete_old_error_log()
-
     pytesseract.pytesseract.tesseract_cmd = get_tesseract_cmd()
 
     print(f"Using tesseract version={pytesseract.get_tesseract_version()}")
 
+    # Check Tesseract environment - if not OK, exit
     if not check_ocr_environment():
         messagebox.showerror(
             "Tesseract puudub",
@@ -74,9 +59,11 @@ def main():
             "Viga", f"Kasutajaliidese viga:\n{exc_type.__name__}: {exc_value}"
         )
 
+    # All uncaught exceptions to be logged
     root.report_callback_exception = tk_report_callback_exception
 
-    root.title("Invoice Sender")
+    # --- Window properties ---
+    root.title("Arvete Saatja")
     root.resizable(True, True)
     center_window(root, 1100, 800)
     root.update_idletasks()
@@ -96,7 +83,7 @@ def main():
     style.configure("TLabel", font=("Helvetica", 15))
     style.configure("info.TLabel", font=("Helvetica", 15))
 
-    # shared state
+    # Shared state
     root.cancel_event = threading.Event()
     root.current_worker = None
 
@@ -112,7 +99,7 @@ def main():
         ),
     ).pack(side=RIGHT, padx=12, pady=12)
 
-    # Cancel button
+    # --- Cancel button ---
     root.btn_cancel = tb.Button(
         bottom_bar,
         text="Katkesta",

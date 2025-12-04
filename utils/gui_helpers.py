@@ -1,6 +1,10 @@
+import ttkbootstrap as tb
 import tkinter as tk
+from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox
 from pathlib import Path
+import threading, os
+import pytesseract
 
 from utils.logging_helper import log_exception
 from src.pdf_extractor import separate_invoices, save_each_invoice_as_file

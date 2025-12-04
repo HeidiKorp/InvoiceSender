@@ -4,7 +4,6 @@ import traceback
 from utils.file_utils import get_log_path
 
 def log_exc_triple(exc_type, exc_value, exc_tb):
-    # Write errors to a log file next to the exe, even in PyInstaller
     log_path = get_log_path()
     try:
         with open(log_path, "a", encoding="utf-8") as f:
