@@ -134,7 +134,7 @@ def save_emails_with_invoices(persons, invoices_dir, subject, body):
                 raise ValidationError(f"Arvet ei leitud korterile: {person.apartment}")
 
             mail.To = person.emails[i]  # Send to the first valid email
-            mail.Subject = subject # maybe period is needed here
+            mail.Subject = subject 
             mail.Body = body
             mail.Categories = "ArveteSaatja"
             mail.Save() # Save to Drafts
@@ -188,6 +188,3 @@ def get_person_invoice(person_apartment, invoices_dir):
     else:
         print(f"Warning: No invoice found for apartment {person_apartment} at {invoice_path}")
         return None
-
-
-# TODO: write a function for sending all emails in drafts folder

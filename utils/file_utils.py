@@ -1,6 +1,13 @@
 from pathlib import Path
 from tkinter import messagebox
 import shutil, os, sys
+import configparser
+
+def read_config():
+    config = configparser.ConfigParser()
+    config_path = Path(__file__).parent / "config.cfg"
+    config.read(config_path)
+    return config
 
 def delete_folder(root, path_str):
     path = Path(path_str)

@@ -13,7 +13,7 @@ from utils.logging_helper import (
     delete_old_error_log,
     _thread_excepthook,
 )
-from utils.file_utils import delete_folder
+from utils.file_utils import delete_folder, read_config
 from utils.ocr_helper import get_tesseract_cmd, check_ocr_environment
 from utils.gui_helpers import select_file, center_window, cancel_current_job, get_data_ready
 
@@ -24,6 +24,7 @@ threading.excepthook = _thread_excepthook
 def main():
     # Clean Outlook cache on startup
     clear_outlook_cache()
+    config = read_config()
 
     # Set up default subject, body
     subject = "Arve"
@@ -63,7 +64,7 @@ def main():
     root.report_callback_exception = tk_report_callback_exception
 
     # --- Window properties ---
-    root.title("Arvete Saatja")
+    root.title(config.get("app", "NAME", fallback="Arvete Saatja"))
     root.resizable(True, True)
     center_window(root, 1100, 800)
     root.update_idletasks()
@@ -83,7 +84,16 @@ def main():
     style.configure("TLabel", font=("Helvetica", 15))
     style.configure("info.TLabel", font=("Helvetica", 15))
 
-    # Shared state
+    # --- Version label (top right) ---
+    version_label = tb.Label(
+        root,
+        text="Versioon " + config.get("app", "VERSION", fallback="1.0.0"),
+        bootstyle=INFO,
+        font=("Helvetica", 10),
+    )   
+    version_label.pack(anchor="ne", padx=10, pady=5)
+
+    # --- Shared state ---
     root.cancel_event = threading.Event()
     root.current_worker = None
 

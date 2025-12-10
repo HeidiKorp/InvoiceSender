@@ -141,28 +141,88 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
         invoices.append(invoice)
     return invoices
 
+def build_address_block(rows: list[str]) -> str:
+    """
+    Build a text block containing "Aadress" line and (optionally) the next line if it looks like part of the address.
+    """
 
-# test with faulty addresses
+    for i, row in enumerate(rows):
+        if "aadress" in row.lower():
+            logging.info(f"Building address block: found row='{row}'")
+
+            address_block = row.strip()
+
+            # Check next row for possible continuation
+            if i + 1 < len(rows):
+                next_row = rows[i + 1].strip()
+                if re.search(r"\d", next_row) and "reg. kood" not in next_row:
+                    logging.info(f"Appending next row to address block: '{next_row}'")
+                    address_block += " " + next_row
+            logging.info(f"Final address block: '{address_block}'")
+            return address_block
+    raise ValidationError("Keyword 'aadress' not found in rows")
+
+
 def extract_address_period_apartment(text):
     rows = text.splitlines()
-    address_parts = extract_parts(rows, "aadress", r"[:-]")
-    address = address_parts[1] if len(address_parts) > 1 else ""
-    apartment = address_parts[-1] if len(address_parts) > 2 else ""
 
+    APARTMENT_RE = re.compile(r"\b(\d{1,3})-(\d+)\b")
+
+    # --- Address & apartment ---
+    address_block = build_address_block(rows)
+
+    # Strip "Aadress" prefix
+    after_label = re.split(r"aadress\s*[:\- ]\s*", address_block, flags=re.IGNORECASE)[-1].strip()
+
+    # Find apartment matches like '113-64' in that block
+    matches = list(APARTMENT_RE.finditer(after_label))
+    
+    if matches:
+        last_match = matches[-1]
+        house_number, apt_number = last_match.groups()
+        apartment = apt_number
+
+        # Everything before the apartment number is the address
+        before_apt = after_label[:last_match.start()].strip()
+        address = f"{before_apt} {house_number}".strip()
+
+        logging.info(f"Extracted address='{address}', apartment='{apartment}'")
+
+    else:
+        # No apartment match found, fallback to last part after splitting
+        apartment = ""
+        address = after_label
+        logging.info(f"No apartment match found. Extracted address='{address}', apartment='{apartment}'")
+
+    # Period
     period_parts = extract_parts(rows, "periood")
     period = period_parts[1] if len(period_parts) > 1 else ""
 
-    year = extract_parts(rows, "kuupäev", pattern=r"[:\-\. ]+")[-1]
+    # Year
+    year_parts = extract_parts(rows, "kuupäev", pattern=r"[:\-\. ]+")
+    logging.info(f"Year parts extracted: {year_parts}")
+    year = year_parts[-1] if len(year_parts) > 1 else ""
+    logging.info(f"Extracted period='{period}', year='{year}'")
 
     return {"address": address, "apartment": apartment, "period": period, "year": year}
 
 
 # Find row keyword, split it, return list of stripped parts
 def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
-    row = next((row for row in rows if keyword in row.lower()), None)
-    if row is None:
-        raise ValidationError(f"Keyword '{keyword}' not found in rows")
-    return [part.strip().lower() for part in re.split(pattern, row) if part]
+    for i, row in enumerate(rows):
+        if keyword in row.lower():
+            logging.info(f"Extracting parts for keyword='{keyword}': found row='{row}'")
+
+            parts = [part.strip().lower() for part in re.split(pattern, row) if part]
+
+            if keyword == "aadress" and i + 1 < len(rows):
+                next_row = rows[i + 1].strip().lower()
+                if re.search(r"\d", next_row):
+                    logging.info(f"Appending next row to address: '{next_row}'")
+                    extra_parts = [part.strip().lower() for part in re.split(pattern, next_row) if part]
+                    parts.extend(extra_parts)
+            return parts
+    raise ValidationError(f"Keyword '{keyword}' not found in rows")
 
 
 def save_each_invoice_as_file(invoices, dest):
