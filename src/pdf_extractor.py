@@ -148,17 +148,13 @@ def build_address_block(rows: list[str]) -> str:
 
     for i, row in enumerate(rows):
         if "aadress" in row.lower():
-            logging.info(f"Building address block: found row='{row}'")
-
             address_block = row.strip()
 
             # Check next row for possible continuation
             if i + 1 < len(rows):
                 next_row = rows[i + 1].strip()
                 if re.search(r"\d", next_row) and "reg. kood" not in next_row:
-                    logging.info(f"Appending next row to address block: '{next_row}'")
                     address_block += " " + next_row
-            logging.info(f"Final address block: '{address_block}'")
             return address_block
     raise ValidationError("Keyword 'aadress' not found in rows")
 
@@ -186,8 +182,6 @@ def extract_address_period_apartment(text):
         before_apt = after_label[:last_match.start()].strip()
         address = f"{before_apt} {house_number}".strip()
 
-        logging.info(f"Extracted address='{address}', apartment='{apartment}'")
-
     else:
         # No apartment match found, fallback to last part after splitting
         apartment = ""
@@ -200,9 +194,7 @@ def extract_address_period_apartment(text):
 
     # Year
     year_parts = extract_parts(rows, "kuupäev", pattern=r"[:\-\. ]+")
-    logging.info(f"Year parts extracted: {year_parts}")
     year = year_parts[-1] if len(year_parts) > 1 else ""
-    logging.info(f"Extracted period='{period}', year='{year}'")
 
     return {"address": address, "apartment": apartment, "period": period, "year": year}
 
@@ -211,14 +203,11 @@ def extract_address_period_apartment(text):
 def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
     for i, row in enumerate(rows):
         if keyword in row.lower():
-            logging.info(f"Extracting parts for keyword='{keyword}': found row='{row}'")
-
             parts = [part.strip().lower() for part in re.split(pattern, row) if part]
 
             if keyword == "aadress" and i + 1 < len(rows):
                 next_row = rows[i + 1].strip().lower()
                 if re.search(r"\d", next_row):
-                    logging.info(f"Appending next row to address: '{next_row}'")
                     extra_parts = [part.strip().lower() for part in re.split(pattern, next_row) if part]
                     parts.extend(extra_parts)
             return parts

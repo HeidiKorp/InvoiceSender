@@ -66,11 +66,6 @@ def main():
     # --- Window properties ---
     root.title(config.get("app", "NAME", fallback="Arvete Saatja"))
     root.resizable(True, True)
-    center_window(root, 1100, 800)
-    root.update_idletasks()
-    root.deiconify()
-    root.lift()
-    root.focus_force()
 
     invoice_var = tb.StringVar()
     clients_var = tb.StringVar()
@@ -176,6 +171,8 @@ def main():
             root.btn_send_drafts.pack(side=RIGHT, padx=(0, 12), pady=12)
             root._send_drafts_packed = True
 
+            center_window(root) # Re-center after adding button
+
     def hide_send_drafts_button():
         if getattr(root, "_send_drafts_packed", False):
             root.btn_send_drafts.pack_forget()
@@ -229,5 +226,11 @@ def main():
 
     # Center the column
     content.grid_columnconfigure(0, weight=1)
+
+    center_window(root)
+    root.update_idletasks()
+    root.deiconify()
+    root.lift()
+    root.focus_force()
 
     root.mainloop()

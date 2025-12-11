@@ -22,21 +22,23 @@ def select_file(label, filetypes, btn_text_var, new_text):
         btn_text_var.set(new_text)
 
 
-def center_window(win, width, height):
+def center_window(win, min_w=800, min_h=600, margin=40):
     """Center a window on the screen with given width/height."""
-    sw = win.winfo_screenwidth()
-    sh = win.winfo_screenheight()
+    win.update_idletasks()
 
-    win.minsize(width, height)  # user can't shrink below this
+    req_w = win.winfo_reqwidth()
+    req_h = win.winfo_reqheight()
 
-    # Enforce minimum dimensions, but also cap at screen size
-    w = max(width, min(sw, width))
-    h = max(height, min(sh, height))
+    screen_w = win.winfo_screenwidth()
+    screen_h = win.winfo_screenheight()
 
-    x = (sw - w) // 2
-    y = (sh - h) // 2
+    width = max(min_w, min(req_w, screen_w - margin))
+    height = max(min_h, min(req_h, screen_h - margin))
 
-    win.geometry(f"{w}x{h}+{x}+{y}")
+    x = (screen_w - width) // 2
+    y = (screen_h - height) // 2
+
+    win.geometry(f"{width}x{height}+{x}+{y}")
 
 
 def validate_files(invoice_path: str, clients_path: str):
