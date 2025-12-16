@@ -3,7 +3,7 @@ import tkinter as tk
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox
 from pathlib import Path
-import threading, os
+import threading, os, re
 import pytesseract
 
 from utils.logging_helper import log_exception
@@ -22,8 +22,7 @@ def select_file(label, filetypes, btn_text_var, new_text):
         btn_text_var.set(new_text)
 
 
-def center_window(win, min_w=800, min_h=600, margin=40):
-    """Center a window on the screen with given width/height."""
+def get_window_size(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     win.update_idletasks()
 
     req_w = win.winfo_reqwidth()
@@ -32,11 +31,34 @@ def center_window(win, min_w=800, min_h=600, margin=40):
     screen_w = win.winfo_screenwidth()
     screen_h = win.winfo_screenheight()
 
-    width = max(min_w, min(req_w, screen_w - margin))
-    height = max(min_h, min(req_h, screen_h - margin))
+    # Clamp to min/max/screen size
+    max_w = min(max_w, screen_w - margin) if max_w else screen_w - margin   
+    max_h = min(max_h, screen_h - margin) if max_h else screen_h - margin
+
+    width = max(min_w, min(req_w, max_w))
+    height = max(min_h, min(req_h, max_h))
+
+    return width, height, screen_w, screen_h
+
+
+def center_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
+    """Center a window on the screen with given width/height."""
+
+    width, height, screen_w, screen_h = get_window_size(win, min_w, min_h, max_w, max_h, margin)
 
     x = (screen_w - width) // 2
     y = (screen_h - height) // 2
+
+    win.geometry(f"{width}x{height}+{x}+{y}")
+
+
+def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
+
+    width, height, screen_w, screen_h = get_window_size(win, min_w, min_h, max_w, max_h, margin)
+
+    # keep current position, do not recenter
+    m = re.match(r"(\d+)x(\d+)\+(\d+)\+(\d+)", win.geometry())
+    x, y = (int(m.group(3)), int(m.group(4))) if m else (100, 100)
 
     win.geometry(f"{width}x{height}+{x}+{y}")
 
@@ -68,6 +90,7 @@ def get_data_ready(
 
     # Show status bar
     parent.status_bar.pack(fill=X, side=BOTTOM)
+    refit_window(parent)
 
     # Reset status UI
     parent.status_label.config(text="Alustan...")
@@ -233,9 +256,6 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     top.transient(parent)
     top.grab_set()
 
-    top.update_idletasks()
-    center_window(top, 600, 450)
-
     style = tb.Style()
     style.configure("info.TLabel", font=("Helvetica", 15))
 
@@ -288,6 +308,8 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     tb.Button(
         btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy
     ).pack(side=RIGHT, padx=6)
+
+    center_window(top, min_w=500, min_h=450, max_w=750)
 
 
 def call_error(text):

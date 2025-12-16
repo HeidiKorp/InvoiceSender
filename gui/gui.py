@@ -227,8 +227,8 @@ def main():
     # Center the column
     content.grid_columnconfigure(0, weight=1)
 
-    center_window(root)
-    root.update_idletasks()
+    center_window(root, min_w=500, min_h=500, max_w=700)
+    # root.update_idletasks()
     root.deiconify()
     root.lift()
     root.focus_force()
