@@ -4,11 +4,15 @@ import re, unicodedata
 from email.utils import parseaddr
 
 LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
-DOMAIN_RE = re.compile(r"^(?=.{1,255}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
+DOMAIN_RE = re.compile(
+    r"^(?=.{1,255}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
 RE_NUM = re.compile(r"^\d+$")
+
 
 class ValidationError(ValueError):
     pass
+
 
 class Person:
     def __init__(self, apartment, address, email=None):
@@ -31,13 +35,17 @@ def read_xls_with_fallback(path):
         except UnicodeDecodeError:
             continue
     # If all failed, re-raise the last one by reading once without catching
-    raise ValidationError(f"Ei saa faili {path!r} lugeda. Proovitud kodeeringud: cp1250, cp1252, latin. Palun salvesta fil Excelis ümber vormingusse .xlsx ja proovi uuesti.")
+    raise ValidationError(
+        f"Ei saa faili {path!r} lugeda. Proovitud kodeeringud: cp1250, cp1252, latin. Palun salvesta fil Excelis ümber vormingusse .xlsx ja proovi uuesti."
+    )
 
 
 def split_emails(email_string):
     emails = []
     if email_string:
-        emails = [email.strip() for email in re.split(r'[;,]', email_string) if email.strip()]
+        emails = [
+            email.strip() for email in re.split(r"[;,]", email_string) if email.strip()
+        ]
         emails = [email for email in emails if validate_email(email)]
     else:
         raise ValueError("Email is required")
@@ -80,22 +88,20 @@ def extract_person_data(input_file):
     # --- Header check
     missing = required - set(df.columns)
     if missing:
-        raise ValidationError("Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust.")
+        raise ValidationError(
+            "Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust."
+        )
 
     persons = []
     for _, row in df.iterrows():
-        email = str(row['klient_mail']).strip()
-        apt = str(row['korter']).strip()
-        address = str(row['yhistu']).strip().lower() + " " + str(row['maj_nr']).strip()
+        email = str(row["klient_mail"]).strip()
+        apt = str(row["korter"]).strip()
+        address = str(row["yhistu"]).strip().lower() + " " + str(row["maj_nr"]).strip()
 
         # --- Row-level checks
         if not RE_NUM.match(apt):
             raise ValidationError("Rida {i+2}: korter peab sisaldama ainult numbreid")
 
-        person = Person(
-            email = email,
-            apartment = apt,
-            address = address
-        )
+        person = Person(email=email, apartment=apt, address=address)
         persons.append(person)
     return persons

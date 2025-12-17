@@ -92,7 +92,7 @@ def ocr_pdf_all_pages(
                         img.close()
                 except Exception:
                     pass
-                
+
         gc.collect()
     return texts
 
@@ -141,6 +141,7 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
         invoices.append(invoice)
     return invoices
 
+
 def build_address_block(rows: list[str]) -> str:
     """
     Build a text block containing "Aadress" line and (optionally) the next line if it looks like part of the address.
@@ -168,25 +169,29 @@ def extract_address_period_apartment(text):
     address_block = build_address_block(rows)
 
     # Strip "Aadress" prefix
-    after_label = re.split(r"aadress\s*[:\- ]\s*", address_block, flags=re.IGNORECASE)[-1].strip()
+    after_label = re.split(r"aadress\s*[:\- ]\s*", address_block, flags=re.IGNORECASE)[
+        -1
+    ].strip()
 
     # Find apartment matches like '113-64' in that block
     matches = list(APARTMENT_RE.finditer(after_label))
-    
+
     if matches:
         last_match = matches[-1]
         house_number, apt_number = last_match.groups()
         apartment = apt_number
 
         # Everything before the apartment number is the address
-        before_apt = after_label[:last_match.start()].strip()
+        before_apt = after_label[: last_match.start()].strip()
         address = f"{before_apt} {house_number}".strip()
 
     else:
         # No apartment match found, fallback to last part after splitting
         apartment = ""
         address = after_label
-        logging.info(f"No apartment match found. Extracted address='{address}', apartment='{apartment}'")
+        logging.info(
+            f"No apartment match found. Extracted address='{address}', apartment='{apartment}'"
+        )
 
     # Period
     period_parts = extract_parts(rows, "periood")
@@ -208,7 +213,11 @@ def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
             if keyword == "aadress" and i + 1 < len(rows):
                 next_row = rows[i + 1].strip().lower()
                 if re.search(r"\d", next_row):
-                    extra_parts = [part.strip().lower() for part in re.split(pattern, next_row) if part]
+                    extra_parts = [
+                        part.strip().lower()
+                        for part in re.split(pattern, next_row)
+                        if part
+                    ]
                     parts.extend(extra_parts)
             return parts
     raise ValidationError(f"Keyword '{keyword}' not found in rows")
