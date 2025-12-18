@@ -40,16 +40,22 @@ def read_xls_with_fallback(path):
     )
 
 
-def split_emails(email_string):
-    emails = []
-    if email_string:
-        emails = [
-            email.strip() for email in re.split(r"[;,]", email_string) if email.strip()
-        ]
-        emails = [email for email in emails if validate_email(email)]
-    else:
+def split_emails(email_string: str) -> list[str]:
+    """
+    Split a string containing one or more emails separated by commas or semicolons.
+    Validate each email and return a list of valid emails.
+    """
+    if not email_string:
         raise ValueError("Email is required")
-    return emails
+    parts = [part.strip() for part in re.split(r"[;,]", email_string)]
+    valid_emails = []
+    for part in parts:
+        try:
+            if validate_email(part):
+                valid_emails.append(part)
+        except ValidationError:
+            continue # Skip invalid emails
+    return valid_emails
 
 
 def validate_email(email: str):
@@ -79,10 +85,25 @@ def validate_email(email: str):
     return True
 
 
+def _validate_person_row(row, row_num: int):
+    """ Validate a single row of person data from the XLS file. """
+    email = str(row["klient_mail"]).strip()
+    apt = str(row["korter"]).strip()
+    address = str(row["yhistu"]).strip().lower() + " " + str(row["maj_nr"]).strip()
+
+    # --- Row-level checks
+    if not RE_NUM.match(apt):
+        raise ValidationError("Rida {row_num}: korter peab sisaldama ainult numbreid")
+    if not email:
+        raise ValidationError(f"Rida {row_num}: meiliaadress on kohustuslik")
+
+    # validate_email(email)
+    return email, apt, address
+
+
 def extract_person_data(input_file):
     # Required columns
     required = {"klient_mail", "korter", "yhistu", "maj_nr"}
-
     df = read_xls_with_fallback(input_file)
 
     # --- Header check
@@ -93,15 +114,7 @@ def extract_person_data(input_file):
         )
 
     persons = []
-    for _, row in df.iterrows():
-        email = str(row["klient_mail"]).strip()
-        apt = str(row["korter"]).strip()
-        address = str(row["yhistu"]).strip().lower() + " " + str(row["maj_nr"]).strip()
-
-        # --- Row-level checks
-        if not RE_NUM.match(apt):
-            raise ValidationError("Rida {i+2}: korter peab sisaldama ainult numbreid")
-
-        person = Person(email=email, apartment=apt, address=address)
-        persons.append(person)
+    for i, (_, row) in enumerate(df.iterrows(), start=2):
+        email, apt, address = _validate_person_row(row, i)
+        persons.append(Person(email=email, apartment=apt, address=address))
     return persons
