@@ -34,7 +34,7 @@ def _validate_page_text(text: str, page_number: int, pdf_path: str):
         )
 
 
-def _parse_invoice_page(text: str, page_number: int, pdf_path: str) -> dict:
+def _parse_invoice_page(page, text: str, page_number: int, pdf_path: str) -> dict:
     _validate_page_text(text, page_number, pdf_path)
     client_data = extract_address_period_apartment(text)
     return Invoice(
@@ -143,7 +143,7 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
 
     invoices = []
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        invoices.append(_parse_invoice_page(text, idx, pdf_path))
+        invoices.append(_parse_invoice_page(page, text, idx, pdf_path))
     return invoices
 
 

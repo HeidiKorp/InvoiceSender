@@ -162,7 +162,7 @@ def save_emails_with_invoices(persons, invoices_dir, subject, body):
             _create_email_draft(outlook, invoice_path, email, subject, body)
 
     # Open drafts folder in Outlook after creating all drafts
-    drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
+    drafts_folder = ns.GetDefaultFolder(OUTLOOK_FOLDER_DRAFTS)
     drafts_folder.Display()
 
 

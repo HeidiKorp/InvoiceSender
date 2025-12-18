@@ -142,6 +142,7 @@ def get_data_ready(
                     raise _Cancelled()
                 _on_progress_ui(parent, page_number, total_pages)
 
+
             try:
                 invoices = separate_invoices(
                     invoice_path,
