@@ -15,6 +15,7 @@ from src.email_sender import (
     validate_persons_vs_invoices,
 )
 
+
 def select_file(label, filetypes, btn_text_var, new_text):
     path = filedialog.askopenfilename(title="Vali fail", filetypes=filetypes)
     if path:
@@ -32,7 +33,7 @@ def get_window_size(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40)
     screen_h = win.winfo_screenheight()
 
     # Clamp to min/max/screen size
-    max_w = min(max_w, screen_w - margin) if max_w else screen_w - margin   
+    max_w = min(max_w, screen_w - margin) if max_w else screen_w - margin
     max_h = min(max_h, screen_h - margin) if max_h else screen_h - margin
 
     width = max(min_w, min(req_w, max_w))
@@ -44,7 +45,9 @@ def get_window_size(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40)
 def center_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     """Center a window on the screen with given width/height."""
 
-    width, height, screen_w, screen_h = get_window_size(win, min_w, min_h, max_w, max_h, margin)
+    width, height, screen_w, screen_h = get_window_size(
+        win, min_w, min_h, max_w, max_h, margin
+    )
 
     x = (screen_w - width) // 2
     y = (screen_h - height) // 2
@@ -54,13 +57,30 @@ def center_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
 
 def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
 
-    width, height, screen_w, screen_h = get_window_size(win, min_w, min_h, max_w, max_h, margin)
+    width, height, screen_w, screen_h = get_window_size(
+        win, min_w, min_h, max_w, max_h, margin
+    )
 
     # keep current position, do not recenter
     m = re.match(r"(\d+)x(\d+)\+(\d+)\+(\d+)", win.geometry())
     x, y = (int(m.group(3)), int(m.group(4))) if m else (100, 100)
 
     win.geometry(f"{width}x{height}+{x}+{y}")
+
+
+
+def _on_progress_ui(parent, page_number, total_pages):
+    """Update progress bar and status label in the GUI thread."""
+    pct = int(page_number / total_pages * 100) if total_pages else 0
+    parent.after(
+        0,
+        lambda: (
+            parent.page_progress.config(value=pct),
+            parent.status_label.configure(
+                text=f"PDF leht {page_number}/{total_pages} - {fname}"
+            ),
+        ),
+    )
 
 
 def validate_files(invoice_path: str, clients_path: str):
@@ -131,6 +151,7 @@ def get_data_ready(
                         ),
                     ),
                 )
+
 
             try:
                 invoices = separate_invoices(

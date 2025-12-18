@@ -10,11 +10,15 @@ from collections import Counter
 from utils.logging_helper import log_exception
 from src.xls_extractor import ValidationError
 
+OUTLOOK_MAIL_ITEM = 0
+OUTLOOK_FOLDER_DRAFTS = 16
+
+
 def get_outlook_path():
     try:
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\OUTLOOK.EXE"
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\OUTLOOK.EXE",
         )
         value, _ = winreg.QueryValueEx(key, "")
         return value
@@ -51,26 +55,32 @@ def ensure_outlook_ready(timeout=120):
     app = None
 
     try:
-        subprocess.Popen([get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
     except Exception as e:
-        print(f'Could not start Outlook. Please ensure it is installed. Error: {e}')
+        print(f"Could not start Outlook. Please ensure it is installed. Error: {e}")
         pass
 
     while time.time() - start < timeout:
         try:
-            app = win32.gencache.EnsureDispatch('Outlook.Application')
+            app = win32.gencache.EnsureDispatch("Outlook.Application")
             session = app.GetNamespace("MAPI")
             # profile, password, showDoalog, newSession
-            session.Logon("", "", True, True)  # This will prompt for profile if not configured
+            session.Logon(
+                "", "", True, True
+            )  # This will prompt for profile if not configured
             _ = session.Accounts  # Accessing Accounts to ensure it's fully loaded
             return app
         except com_error:
             time.sleep(2)
         except Exception:
             time.sleep(2)
-    raise RuntimeError("Outlook did not become ready in time. "
-                        "Open Outlook manually, finish the setup wizard"
-                        "then rerun the script.")
+    raise RuntimeError(
+        "Outlook did not become ready in time. "
+        "Open Outlook manually, finish the setup wizard"
+        "then rerun the script."
+    )
 
 
 def apartments_from_persons(persons):
@@ -105,65 +115,77 @@ def validate_persons_vs_invoices(persons, invoices_dir):
     if missing_for_people:
         problems.append(f"Puuduvad arved korteritele: {', '.join(missing_for_people)}.")
     if extra_invoices:
-        problems.append(f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}.")
+        problems.append(
+            f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}."
+        )
     if duplicates:
-        problems.append(f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.")
+        problems.append(
+            f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}."
+        )
 
     if problems:
         raise ValidationError(" ".join(problems))
 
 
+def _create_email_draft(
+    outlook,
+    invoice_path: str,
+    to_email: str,
+    subject: str,
+    body: str,
+    category: str = "ArveteSaatja",
+):
+    mail = outlook.CreateItem(OUTLOOK_MAIL_ITEM)
+
+    if invoice_path:
+        mail.Attachments.Add(invoice_path)
+
+    mail.To = to_email
+    mail.Subject = subject
+    mail.Body = body
+    mail.Categories = category
+    mail.Save()  # Save to Drafts
+    return mail
+
+
 def save_emails_with_invoices(persons, invoices_dir, subject, body):
-    olMailItem = 0
-    olFolderDrafts = 16
-
-    outlook = win32.Dispatch('outlook.application')
+    """Create email drafts in Outlook for each person with their invoice attached."""
+    outlook = win32.Dispatch("outlook.application")
     ns = outlook.Session
-    drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
-
-    for person in persons:
-        for i in range(len(person.emails)):
-            mail = outlook.CreateItem(olMailItem)
-
-            invoice_path = get_person_invoice(person.apartment, invoices_dir)
-            if invoice_path:
-                mail.Attachments.Add(invoice_path)
-
-            if not invoice_path:
-                # Should not happen now, but guard anyway
-                raise ValidationError(f"Arvet ei leitud korterile: {person.apartment}")
-
-            mail.To = person.emails[i]  # Send to the first valid email
-            mail.Subject = subject 
-            mail.Body = body
-            mail.Categories = "ArveteSaatja"
-            mail.Save() # Save to Drafts
     
+    for person in persons:
+        invoice_path = get_person_invoice(person.apartment, invoices_dir)
+        if not invoice_path:
+            # Should not happen now, but guard anyway
+            raise ValidationError(f"Arvet ei leitud korterile: {person.apartment}")
+        for email in person.emails:
+            _create_email_draft(outlook, invoice_path, email, subject, body)
+
+    # Open drafts folder in Outlook after creating all drafts
+    drafts_folder = ns.GetDefaultFolder(OUTLOOK_FOLDER_DRAFTS)
     drafts_folder.Display()
 
 
 def send_drafts(parent):
-    olFolderDrafts = 16
-
-    outlook = win32.Dispatch('outlook.application')
+    """Send all email drafts in Outlook categorized with 'ArveteSaatja'."""
+    outlook = win32.Dispatch("outlook.application")
     ns = outlook.Session
 
+    drafts_folder = ns.GetDefaultFolder(OUTLOOK_FOLDER_DRAFTS)
+    messages = drafts_folder.Items
+    to_send_ids = []
+
+    # Clear any existing selection
     try:
         explorer = outlook.ActiveExplorer()
         explorer.ClearSelection()
     except Exception:
         pass
 
-    drafts_folder = ns.GetDefaultFolder(olFolderDrafts)
-
-    messages = drafts_folder.Items
-    to_send_ids = []
-
     for i in range(1, messages.Count + 1):
         message = messages.Item(i)
-        if "ArveteSaatja" in message.Categories:
+        if "ArveteSaatja" in (message.Categories or ""):
             to_send_ids.append((message.EntryID, drafts_folder.StoreID))
-
     sent_count = 0
 
     for entry_id, store_id in to_send_ids:
@@ -173,18 +195,18 @@ def send_drafts(parent):
             sent_count += 1
         except Exception as e:
             log_exception(e)
-            print(f"Could not retrieve message with EntryID {entry_id}. Error: {e}")
             continue
 
-    print(f"Sent {sent_count} emails from Drafts.")
     parent.hide_send_drafts_button()
-
+    return sent_count
 
 
 def get_person_invoice(person_apartment, invoices_dir):
-    invoice_path = invoices_dir / f'{person_apartment}.pdf'
+    invoice_path = invoices_dir / f"{person_apartment}.pdf"
     if invoice_path.exists():
         return str(invoice_path)
     else:
-        print(f"Warning: No invoice found for apartment {person_apartment} at {invoice_path}")
+        print(
+            f"Warning: No invoice found for apartment {person_apartment} at {invoice_path}"
+        )
         return None

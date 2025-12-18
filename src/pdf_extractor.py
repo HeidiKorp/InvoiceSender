@@ -23,6 +23,29 @@ logging.basicConfig(
 )
 
 
+def _validate_page_text(text: str, page_number: int, pdf_path: str):
+    if not text or not text.strip():
+        logging.error(
+            f"SEPARATE_INVOICES: EMPTY text for page {page_number} of '{pdf_path}'"
+        )
+        raise ValidationError(
+            f"PDF faili '{pdf_path}' leheküljelt {page_number} ei õnnestunud teksti lugeda ka pärast OCR-i. "
+            "PDF võib olla vigane."
+        )
+
+
+def _parse_invoice_page(page, text: str, page_number: int, pdf_path: str) -> dict:
+    _validate_page_text(text, page_number, pdf_path)
+    client_data = extract_address_period_apartment(text)
+    return Invoice(
+        page=page,
+        address=client_data["address"],
+        period=client_data["period"],
+        apartment=client_data["apartment"],
+        year=client_data["year"],
+    )
+
+
 class Invoice:
     def __init__(self, page, address, period, apartment, year):
         self.page = page
@@ -100,10 +123,9 @@ def ocr_pdf_all_pages(
 # Only splity the files here, extract information in another function
 def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
     """
-    OCRib kogu PDF-i ja kasutab saadud teksti sinu olemasoleva parseriga.
-    Säilitab sinu varasema 'Invoice(page, ...)' signatuuri, andes kaasa pypdf page-objekti.
+    Separate a multi-invoice PDF into individual invoices by OCRing each page and extracting relevant data.
+    Returns a list of Invoice objects.
     """
-    print(on_progress)
     if on_progress:
         page_texts = ocr_pdf_all_pages(
             pdf_path, "est", dpi=300, on_progress=on_progress, cancel_flag=cancel_flag
@@ -121,24 +143,7 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
 
     invoices = []
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        rows = (text or "").splitlines()
-        if len(text.strip()) == 0:
-            logging.error(
-                f"SEPARATE_INVOICES: EMPTY text for page {idx} of '{pdf_path}'"
-            )
-            raise ValidationError(
-                f"PDF faili '{pdf_path}' leheküljelt {idx} ei õnnestunud teksti lugeda ka pärast OCR-i. "
-                "PDF võib olla vigane."
-            )
-        client_data = extract_address_period_apartment(text)
-        invoice = Invoice(
-            page,
-            client_data["address"],
-            client_data["period"],
-            client_data["apartment"],
-            client_data["year"],
-        )
-        invoices.append(invoice)
+        invoices.append(_parse_invoice_page(page, text, idx, pdf_path))
     return invoices
 
 
