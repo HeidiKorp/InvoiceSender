@@ -68,7 +68,7 @@ def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     win.geometry(f"{width}x{height}+{x}+{y}")
 
 
-def _on_progress_ui(parent, page_number, total_pages):
+def _on_progress_ui(parent, page_number, total_pages, fname):
     """Update progress bar and status label in the GUI thread."""
     pct = int(page_number / total_pages * 100) if total_pages else 0
     parent.after(
@@ -140,7 +140,7 @@ def get_data_ready(
                 if parent.cancel_event.is_set():
                     print(f"Cancel event set during OCR processing")
                     raise _Cancelled()
-                _on_progress_ui(parent, page_number, total_pages)
+                _on_progress_ui(parent, page_number, total_pages, fname)
 
 
             try:
