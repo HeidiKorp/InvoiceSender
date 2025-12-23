@@ -20,6 +20,7 @@ REFIT_REGEX = r"(\d+)x(\d+)\+(\d+)\+(\d+)"
 
 
 def select_file(label, filetypes, btn_text_var, new_text):
+    """Open file dialog and set label and button text."""
     path = filedialog.askopenfilename(title="Vali fail", filetypes=filetypes)
     if path:
         label.set(path)
@@ -27,6 +28,7 @@ def select_file(label, filetypes, btn_text_var, new_text):
 
 
 def get_window_size(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
+    """Get window size clamped to min/max/screen size."""
     win.update_idletasks()
 
     req_w = win.winfo_reqwidth()
@@ -47,7 +49,6 @@ def get_window_size(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40)
 
 def center_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     """Center a window on the screen with given width/height."""
-
     width, height, screen_w, screen_h = get_window_size(
         win, min_w, min_h, max_w, max_h, margin
     )
@@ -59,7 +60,7 @@ def center_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
 
 
 def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
-
+    """Refit window to new size but keep current position."""
     width, height, screen_w, screen_h = get_window_size(
         win, min_w, min_h, max_w, max_h, margin
     )
@@ -86,6 +87,7 @@ def _on_progress_ui(parent, page_number, total_pages, fname):
 
 
 def validate_file_exists(path: str, label: str) -> str:
+    """Validate that a file exists at the given path."""
     if not path:
         raise ValidationError(f"{label} on kohustuslik.")
     if not Path(path).is_file():
@@ -94,16 +96,19 @@ def validate_file_exists(path: str, label: str) -> str:
 
 
 def validate_files(invoice_path: str, clients_path: str):
+    """Validate that both invoice and clients files exist."""
     invoice = validate_file_exists(invoice_path, "Arvete fail")
     clients = validate_file_exists(clients_path, "Klientide fail")
     return invoice, clients
 
 
 def call_error(text):
+    """Show an error message box."""
     messagebox.showerror("Viga", text)
 
 
 def _create_dest_directory(invoice_path: str):
+    """Create a destination directory for processed invoices."""
     parent = Path(invoice_path).resolve().parent
     dest = parent / "arved"
 
@@ -147,6 +152,7 @@ def _save_and_open_invoices(
 
 
 def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
+    """Validate input files and prepare the UI for processing."""
     invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
     
     # Show status bar
@@ -164,13 +170,15 @@ def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
 
 
 def on_cancel_ui(parent):
+    """Update the UI to reflect cancellation."""
     parent.status_label.config(text="Katkestatud")
     parent.page_progress.config(value=0, mode="determinate")
     parent.btn_cancel.configure(state=DISABLED)
     parent.status_bar.pack_forget()
 
 
-def extract_person(clients_path: str, cancel_flag) :
+def extract_person(clients_path: str, cancel_flag):
+    """Extract person data from the clients file."""
     persons = extract_person_data(clients_path) # raise ValidationError on error
     if cancel_flag.is_set():
         raise _Cancelled()
@@ -205,67 +213,92 @@ def finalize_and_open(parent, invoices, dest, template_root, persons, subject, b
             log_exception(e2)
 
 
-def worker(parent, invoice_path, clients_path, template_root, subject, body):
-    try:
-        # 1) Extract people
-        persons = extract_person(clients_path, parent.cancel_event)
+def _handle_worker_error(parent, err):
+    """Handle errors from the worker thread in the GUI thread."""
+    if isinstance(err, _Cancelled):
+        parent.after(0, lambda: on_cancel_ui(parent))
+        log_exception(_Cancelled("Operation cancelled by user."))
+    elif isinstance(err, ValidationError):
+        parent.after(0, lambda err=err: messagebox.showerror("Viga", str(err)))
+        log_exception(err)
+    else:
+        parent.after(
+            0,
+            lambda err=err: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"),
+        )
+        log_exception(err)
+
+
+def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag):
+    """Extract invoices and persons data."""
+    # Extract people
+    persons = extract_person(clients_path, parent.cancel_event)
+    if parent.cancel_event.is_set():
+        raise _Cancelled()
+
+    def on_progress(page_number, total_pages):
         if parent.cancel_event.is_set():
             raise _Cancelled()
+        _on_progress_ui(parent, page_number, total_pages, fname)
 
-        # 2) OCR read-through (emits per-page progress)
+    # Process ocr
+    invoices = _process_ocr(invoice_path, parent.cancel_event, on_progress)
+
+    if parent.cancel_event.is_set():
+        raise _Cancelled()
+    return persons, invoices
+
+
+def _worker_finalize_invoices(parent, invoices, invoice_path):
+    """Finalize invoices and create destination folder."""
+    # Continue processing (back in main thread)
+    parent.after(
+        0, lambda: parent.status_label.configure(text="Töötlen andmeid...")
+    )
+
+    # 4) Create a destination folder
+    dest = _create_dest_directory(invoice_path)
+
+    if parent.cancel_event.is_set():
+        raise _Cancelled()
+
+    example_invoice = invoices[0]
+    subject = f"Arve {example_invoice.period} {example_invoice.year}"
+    return dest, subject
+
+
+def worker(parent, invoice_path, clients_path, template_root, subject, body):
+    """Worker thread function to process invoices and open email editor."""
+    try:
+        # OCR read-through (emits per-page progress)
         fname = os.path.basename(invoice_path)
 
-        def on_progress(page_number, total_pages):
-            if parent.cancel_event.is_set():
-                raise _Cancelled()
-            _on_progress_ui(parent, page_number, total_pages, fname)
-
-        # Process ocr
-        invoices = _process_ocr(invoice_path, parent.cancel_event, on_progress)
-
-        if parent.cancel_event.is_set():
-            raise _Cancelled()
-
-        # 3) Continue processing (back in main thread)
-        parent.after(
-            0, lambda: parent.status_label.configure(text="Töötlen andmeid...")
+        persons, invoices = _worker_extract_and_process(
+            parent, invoice_path, clients_path, parent.cancel_event
         )
 
-        # 4) Create a destination folder
-        dest = _create_dest_directory(invoice_path)
-
-        if parent.cancel_event.is_set():
-            raise _Cancelled()
-
-        example_invoice = invoices[0]
-        subject = f"Arve {example_invoice.period} {example_invoice.year}"
+        dest, subject = _worker_finalize_invoices(
+            parent, invoices, invoice_path
+        )
 
         # 5) Finalize and open email editor
         parent.after(0, lambda: finalize_and_open(parent, invoices, dest, template_root, persons, subject, body))
 
-    except _Cancelled:
-        parent.after(0, lambda: on_cancel_ui(parent))
-        log_exception(_Cancelled("Operation cancelled by user."))
-    except ValidationError as e:
-        parent.after(0, lambda err=e: messagebox.showerror("Viga", str(err)))
-        log_exception(e)
     except Exception as e:
-        parent.after(
-            0,
-            lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"),
-        )
-        log_exception(e)
+        _handle_worker_error(parent, e)
     finally:
         parent.page_progress.config(value=0, mode="determinate")
 
 
 def start_processing_thread(target, *args):
+    """Start a worker thread to process invoices."""
     threading.Thread(target=lambda: target(*args), daemon=True).start()
 
 
 def get_data_ready(
     parent, invoice_var: str, clients_var: str, template_root, subject, body
 ):
+    """Validate inputs and start processing thread."""
     try:
         invoice_path, clients_path = validate_and_prepare_ui(parent, invoice_var, clients_var)
     except ValidationError as ve:
@@ -277,6 +310,7 @@ def get_data_ready(
 
 
 def open_outlook(persons, invoices_dir, subject, body):
+    """Open Outlook email editor with prepared emails."""
     # Compose emails and send them
     ensure_outlook_ready()
     try:
@@ -286,20 +320,8 @@ def open_outlook(persons, invoices_dir, subject, body):
     save_emails_with_invoices(persons, invoices_dir, subject, body)
 
 
-def open_email_editor(parent, persons, invoices_dir, subject, body):
-    # global DEFAULT_SUBJECT, DEFAULT_BODY
-
-    parent.btn_cancel.configure(state=DISABLED)
-
-    top = tb.Toplevel(parent)
-    top.title("Muuda meili malli")
-    top.transient(parent)
-    top.grab_set()
-
-    style = tb.Style()
-    style.configure("info.TLabel", font=("Helvetica", 15))
-
-    # Subject
+def _create_email_subject_section(top, subject):
+    """Create the email subject entry section."""
     subject_var = tb.StringVar(value=subject)
     tb.Label(top, text="Meili teema:", bootstyle=INFO).pack(
         anchor="w", padx=12, pady=(12, 4)
@@ -307,8 +329,11 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     tb.Entry(top, textvariable=subject_var, font=("Helvetica", 15)).pack(
         fill=X, padx=12
     )
+    return subject_var
 
-    # Body
+
+def _create_email_body_section(top, body):
+    """Create the email body text section."""
     tb.Label(top, text="Meili sisu:", bootstyle=INFO).pack(
         anchor="w", padx=12, pady=(12, 4)
     )
@@ -325,16 +350,19 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     body_text.configure(yscrollcommand=yscroll.set)
 
     body_text.insert(tk.END, body)
+    return body_text
 
-    # Buttons
+
+def _create_email_buttons_section(top, parent, persons, invoices_dir, subject_var, body_text):
+    """Create the email buttons section."""
     btns_frame = tb.Frame(top)
     btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
 
     def save_and_close(subject_var):
         subject_val = subject_var.get()
         body_val = body_text.get("1.0", tk.END).strip()
-        body = body_val
-        subject = subject_val
+        # body = body_val
+        # subject = subject_val
         top.destroy()
         open_outlook(persons, invoices_dir, subject_val, body_val)
         parent.on_emails_saved()
@@ -349,8 +377,32 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
         btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy
     ).pack(side=RIGHT, padx=6)
 
-    center_window(top, min_w=500, min_h=450, max_w=750)
 
+def open_email_editor(parent, persons, invoices_dir, subject, body):
+    """Open a window to edit email subject and body before sending."""
+
+    parent.btn_cancel.configure(state=DISABLED)
+
+    top = tb.Toplevel(parent)
+    top.title("Muuda meili malli")
+    top.transient(parent)
+    top.grab_set()
+
+    style = tb.Style()
+    style.configure("info.TLabel", font=("Helvetica", 15))
+
+    # Subject
+    subject_var = _create_email_subject_section(top, subject)
+
+    # Body
+    body_text = _create_email_body_section(top, body)
+
+    # Buttons
+    _create_email_buttons_section(
+        top, parent, persons, invoices_dir, subject_var, body_text
+    )
+
+    center_window(top, min_w=500, min_h=450, max_w=750)
 
 class _Cancelled(Exception):
     # "Operation cancelled by user."
@@ -358,4 +410,5 @@ class _Cancelled(Exception):
 
 
 def cancel_current_job(root):
+    """Set the cancel event to stop the current job."""
     root.cancel_event.set()  # callable from anywhere
