@@ -237,7 +237,6 @@ def _setup_send_drafts_button_handlers(root, parent):
     root.on_emails_saved = on_emails_saved
     root.hide_send_drafts_button = hide_send_drafts_button
 
-    return btn_send_drafts
 
 def _create_content_area(root, invoice_var, clients_var):
     """
@@ -290,6 +289,27 @@ def _create_content_area(root, invoice_var, clients_var):
     return content
 
 
+def _setup_ui_components(root, config, invoice_var, clients_var, subject, body):
+    """Set up all UI components."""
+    # --- Version label (top right) ---
+    _create_version_label(root, config)
+
+    # --- Bottom bar ---
+    bottom_bar = _create_bottom_bar(root, invoice_var, clients_var, subject, body)
+
+    # --- Status bar (bottom, above the button row) ---
+    _create_status_bar(root)
+
+    # -- Delete button handlers ---
+    _setup_delete_button_handlers(root, bottom_bar)
+
+    # --- Send drafts button handlers ---
+    _setup_send_drafts_button_handlers(root, bottom_bar)
+
+    # --- Content area ---
+    content = _create_content_area(root, invoice_var, clients_var)
+
+
 def main():
     # --- Clean Outlook cache on startup ---
     clear_outlook_cache()
@@ -321,23 +341,8 @@ def main():
     invoice_var = tb.StringVar()
     clients_var = tb.StringVar()
 
-    # --- Version label (top right) ---
-    _create_version_label(root, config)
-
-    # --- Bottom bar ---
-    bottom_bar = _create_bottom_bar(root, invoice_var, clients_var, subject, body)
-
-    # --- Status bar (bottom, above the button row) ---
-    _create_status_bar(root)
-
-    # -- Delete button handlers ---
-    btn_delete_invoices = _setup_delete_button_handlers(root, bottom_bar)
-
-    # --- Send drafts button handlers ---
-    btn_send_drafts = _setup_send_drafts_button_handlers(root, bottom_bar)
-
-    # --- Content area ---
-    content = _create_content_area(root, invoice_var, clients_var)
+    # --- Create UI components ---
+    _setup_ui_components(root, config, invoice_var, clients_var, subject, body)
 
     center_window(root, min_w=500, min_h=500, max_w=700)
     # root.update_idletasks()

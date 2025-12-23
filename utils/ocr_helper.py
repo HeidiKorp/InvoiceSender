@@ -15,10 +15,11 @@ def get_tesseract_cmd():
         return base_dir
         
 
-def check_ocr_environment():
+def _check_tesseract_version():
     try:
         v = pytesseract.get_tesseract_version()
         log_line(f"Tesseract version={v}")
+        return v
     except Exception as e:
         log_exception(e)
         messagebox.showerror(
@@ -26,15 +27,28 @@ def check_ocr_environment():
             "Tesseract OCR ei ole selles arvutis paigaldatud või ei leitud teekonda.\n\n"
             f"Viga: {e}"
         )
-        return False
+        return None
 
+
+def _check_tesseract_languages():
     try:
         langs = pytesseract.get_languages(config="")
+        return langs
     except Exception as e:
         messagebox.showerror(
             "Tesseract viga",
             f"Tesseract on paigaldatud (versioon {v}), aga keelte nimekirja ei saanud lugeda.\n\nViga: {e}"
         )
+        return None
+
+def check_ocr_environment():
+    """Check if Tesseract OCR is installed and has Estonian language data."""
+    v = _check_tesseract_version()
+    if not v:
+        return False
+
+    langs = _check_tesseract_languages()
+    if not langs:
         return False
 
     if "est" not in langs:

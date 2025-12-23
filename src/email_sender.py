@@ -97,31 +97,52 @@ def apartments_from_invoices(invoices_dir, exts={".pdf"}):
     return counts
 
 
-def validate_persons_vs_invoices(persons, invoices_dir):
-    person_apts = apartments_from_persons(persons)
-    invoice_counts = apartments_from_invoices(invoices_dir)
-    invoice_apts = set(invoice_counts.keys())
+def _check_missing_invoices(person_apts, invoice_apts):
+    """ Check that each person has a corresponding invoice file. """
+    return sorted(person_apts - invoice_apts, key=str)
 
-    # Who's missing an invoice?
-    missing_for_people = sorted(person_apts - invoice_apts, key=str)
 
-    # Invoices that don't match any pattern
-    extra_invoices = sorted(invoice_apts - person_apts, key=str)
+def _check_extra_invoices(person_apts, invoice_apts):
+    """ Check for invoice files that don't match any person. """
+    return sorted(invoice_apts - person_apts, key=str)
 
-    # Duplicates (same apartment has >1 file)
-    duplicates = sorted([apt for apt, c in invoice_counts.items() if c > 1], key=str)
+def _check_duplicate_invoices(invoice_counts):
+    """ Check for duplicate invoice files for the same apartment. """
+    return sorted([apt for apt, c in invoice_counts.items() if c > 1], key=str)
 
+
+def _build_validation_errors(missing, extra, duplicates):
     problems = []
-    if missing_for_people:
-        problems.append(f"Puuduvad arved korteritele: {', '.join(missing_for_people)}.")
-    if extra_invoices:
+    if missing:
+        problems.append(f"Puuduvad arved korteritele: {', '.join(missing)}.")
+    if extra:
         problems.append(
-            f"Arved, millele ei leitud klienti: {', '.join(extra_invoices)}."
+            f"Arved, millele ei leitud klienti: {', '.join(extra)}."
         )
     if duplicates:
         problems.append(
             f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}."
         )
+    return problems
+
+def validate_persons_vs_invoices(persons, invoices_dir):
+    person_apts = apartments_from_persons(persons)
+    invoice_counts = apartments_from_invoices(invoices_dir)
+    invoice_apts = set(invoice_counts.keys())
+
+
+    # Who's missing an invoice?
+    missing_for_people = _check_missing_invoices(person_apts, invoice_apts)
+
+    # Invoices that don't match any pattern
+    extra_invoices = _check_extra_invoices(person_apts, invoice_apts)
+
+    # Duplicates (same apartment has >1 file)
+    duplicates = _check_duplicate_invoices(invoice_counts)
+
+    problems = _build_validation_errors(
+        missing_for_people, extra_invoices, duplicates
+    )
 
     if problems:
         raise ValidationError(" ".join(problems))

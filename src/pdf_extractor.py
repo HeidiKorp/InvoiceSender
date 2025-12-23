@@ -58,6 +58,35 @@ class Invoice:
         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
 
 
+def _ocr_single_page(page, page_idx, doc, pdf_path, lang, ocr_config, matrix, timeout_sec, on_progress, cancel_flag):
+    """OCR a single page and return the extracted text."""
+    if cancel_flag and cancel_flag.is_set():
+        logging.info("OCR process cancelled by user.")
+        return None
+
+    if on_progress:
+        try:
+            on_progress(page_idx, doc.page_count)
+        except Exception:
+            logging.debug(
+                "on_progress callback raised an exception:", exc_info=True
+            )
+
+    logging.info(f"OCR processing page {page_idx}/{doc.page_count} of '{pdf_path}'")
+    img = None
+    try:
+        img = render_page_to_image(page, matrix)
+        img = preprocess_for_ocr(img)
+        text = run_ocr_on_image(img, lang, ocr_config, page_idx, pdf_path, timeout_sec)
+        return text
+    finally:
+        if img is not None:
+            try:
+                img.close()
+            except Exception:
+                pass
+
+
 def ocr_pdf_all_pages(
     pdf_path: str,
     lang: str = "est",
@@ -89,32 +118,23 @@ def ocr_pdf_all_pages(
         total_pages = doc.page_count
 
         for i, page in enumerate(doc, start=1):
-            if cancel_flag and cancel_flag.is_set():
+            text = _ocr_single_page(
+                page,
+                i,
+                doc,
+                pdf_path,
+                lang,
+                ocr_config,
+                matrix,
+                timeout_sec,
+                on_progress,
+                cancel_flag,
+            )
+            if text is not None:
+                texts.append(text)
+            elif cancel_flag and cancel_flag.is_set():
                 logging.info("OCR process cancelled by user.")
                 break
-
-            if on_progress:
-                try:
-                    on_progress(i, doc.page_count)
-                except Exception:
-                    logging.debug(
-                        "on_progress callback raised an exception:", exc_info=True
-                    )
-
-            logging.info(f"OCR processing page {i}/{doc.page_count} of '{pdf_path}'")
-            img = None
-            pix = None
-            try:
-                img = render_page_to_image(page, matrix)
-                img = preprocess_for_ocr(img)
-                text = run_ocr_on_image(img, lang, ocr_config, i, pdf_path, timeout_sec)
-                texts.append(text)
-            finally:
-                try:
-                    if img is not None:
-                        img.close()
-                except Exception:
-                    pass
 
         gc.collect()
     return texts
@@ -165,10 +185,32 @@ def build_address_block(rows: list[str]) -> str:
     raise ValidationError("Keyword 'aadress' not found in rows")
 
 
+def _extract_apartment_from_address(address_block: str) -> tuple[str, str]:
+    APARTMENT_RE = re.compile(r"\b(\d{1,3})-(\d+)\b")
+
+    # Find apartment matches like '113-64' in that block
+    matches = list(APARTMENT_RE.finditer(address_block))
+
+    if matches:
+        last_match = matches[-1]
+        house_number, apt_number = last_match.groups()
+        apartment = apt_number
+
+        # Everything before the apartment number is the address
+        before_apt = address_block[: last_match.start()].strip()
+        address = f"{before_apt} {house_number}".strip()
+    else:
+        # No apartment match found, fallback to last part after splitting
+        apartment = ""
+        address = address_block
+        logging.info(
+            f"No apartment match found. Extracted address='{address}', apartment='{apartment}'"
+        )
+    return apartment, address
+
+
 def extract_address_period_apartment(text):
     rows = text.splitlines()
-
-    APARTMENT_RE = re.compile(r"\b(\d{1,3})-(\d+)\b")
 
     # --- Address & apartment ---
     address_block = build_address_block(rows)
@@ -178,25 +220,8 @@ def extract_address_period_apartment(text):
         -1
     ].strip()
 
-    # Find apartment matches like '113-64' in that block
-    matches = list(APARTMENT_RE.finditer(after_label))
-
-    if matches:
-        last_match = matches[-1]
-        house_number, apt_number = last_match.groups()
-        apartment = apt_number
-
-        # Everything before the apartment number is the address
-        before_apt = after_label[: last_match.start()].strip()
-        address = f"{before_apt} {house_number}".strip()
-
-    else:
-        # No apartment match found, fallback to last part after splitting
-        apartment = ""
-        address = after_label
-        logging.info(
-            f"No apartment match found. Extracted address='{address}', apartment='{apartment}'"
-        )
+    # Extract apartment number
+    apartment, address = _extract_apartment_from_address(after_label)
 
     # Period
     period_parts = extract_parts(rows, "periood")
