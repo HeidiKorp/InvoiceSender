@@ -3,6 +3,8 @@ import pandas as pd
 import re, unicodedata
 from email.utils import parseaddr
 
+from utils.file_utils import get_field
+
 LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
 DOMAIN_RE = re.compile(
     r"^(?=.{1,255}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
@@ -45,16 +47,15 @@ def split_emails(email_string: str) -> list[str]:
     Split a string containing one or more emails separated by commas or semicolons.
     Validate each email and return a list of valid emails.
     """
-    if not email_string:
-        raise ValueError("Email is required")
-    parts = [part.strip() for part in re.split(r"[;,]", email_string)]
+    if not email_string or str(email_string).strip() == "":
+        raise ValidationError("Meiliaadress on kohustuslik")
+    parts = [part.strip() for part in re.split(r"[;,]", email_string) if part.strip()]
     valid_emails = []
     for part in parts:
-        try:
-            if validate_email(part):
-                valid_emails.append(part)
-        except ValidationError:
-            continue # Skip invalid emails
+        validate_email(part)
+        valid_emails.append(part)
+    if not valid_emails:
+        raise ValidationError("Puuduvad kehtivad meiliaadressid")
     return valid_emails
 
 
@@ -85,19 +86,25 @@ def validate_email(email: str):
     return True
 
 
+
+
+
 def _validate_person_row(row, row_num: int):
     """ Validate a single row of person data from the XLS file. """
-    email = str(row["klient_mail"]).strip()
-    apt = str(row["korter"]).strip()
-    address = str(row["yhistu"]).strip().lower() + " " + str(row["maj_nr"]).strip()
+    email = get_field(row, "klient_mail")
+    apt = get_field(row, "korter")
+    yhistu = get_field(row, "yhistu")
+    maj_nr = get_field(row, "maj_nr")
+    address = f"{yhistu.lower()}, {maj_nr}".strip()
 
     # --- Row-level checks
     if not RE_NUM.match(apt):
-        raise ValidationError("Rida {row_num}: korter peab sisaldama ainult numbreid")
+        raise ValidationError(f"Rida {row_num}: korter peab sisaldama ainult numbreid")
     if not email:
         raise ValidationError(f"Rida {row_num}: meiliaadress on kohustuslik")
 
-    # validate_email(email)
+    # split_emails does validation internally
+    split_emails(email)
     return email, apt, address
 
 
@@ -110,11 +117,13 @@ def extract_person_data(input_file):
     missing = required - set(df.columns)
     if missing:
         raise ValidationError(
-            "Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust."
+            f"Klientide failist on puudu tulp: {missing}. Palun kontrolli faili õigsust."
         )
 
     persons = []
-    for i, (_, row) in enumerate(df.iterrows(), start=2):
-        email, apt, address = _validate_person_row(row, i)
+    for row_num, row in enumerate(df.itertuples(index=False, name="Row"), start=2):
+        email, apt, address = _validate_person_row(row, row_num)
         persons.append(Person(email=email, apartment=apt, address=address))
+    if not persons:
+        raise ValidationError("Klientide fail ei sisalda ühtegi kehtivat kirjet.")
     return persons

@@ -37,3 +37,14 @@ def get_log_path():
         base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, "error.log")
 
+
+
+def get_field(row, name, default="") -> str:
+    if hasattr(row, name):
+        val = getattr(row, name)
+    else:
+        try:
+            val = row[name]
+        except Exception:
+            val = default
+    return ("" if val is None else str(val)).strip()

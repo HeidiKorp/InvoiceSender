@@ -15,6 +15,9 @@ from src.email_sender import (
     validate_persons_vs_invoices,
 )
 
+HUNDRED_PERCENT = 100
+REFIT_REGEX = r"(\d+)x(\d+)\+(\d+)\+(\d+)"
+
 
 def select_file(label, filetypes, btn_text_var, new_text):
     path = filedialog.askopenfilename(title="Vali fail", filetypes=filetypes)
@@ -62,7 +65,7 @@ def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     )
 
     # keep current position, do not recenter
-    m = re.match(r"(\d+)x(\d+)\+(\d+)\+(\d+)", win.geometry())
+    m = re.match(REFIT_REGEX, win.geometry())
     x, y = (int(m.group(3)), int(m.group(4))) if m else (100, 100)
 
     win.geometry(f"{width}x{height}+{x}+{y}")
@@ -70,7 +73,7 @@ def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
 
 def _on_progress_ui(parent, page_number, total_pages, fname):
     """Update progress bar and status label in the GUI thread."""
-    pct = int(page_number / total_pages * 100) if total_pages else 0
+    pct = int(page_number / total_pages * HUNDRED_PERCENT) if total_pages else 0
     parent.after(
         0,
         lambda: (
@@ -82,31 +85,70 @@ def _on_progress_ui(parent, page_number, total_pages, fname):
     )
 
 
+def validate_file_exists(path: str, label: str) -> str:
+    if not path:
+        raise ValidationError(f"{label} on kohustuslik.")
+    if not Path(path).is_file():
+        raise ValidationError(f"{label} faili ei eksisteeri: {path}")
+    return str(path)
+
+
 def validate_files(invoice_path: str, clients_path: str):
-    if not invoice_path or not clients_path:
-        messagebox.showerror("Error", "Palun vali nii arvete kui klientide failid.")
-        raise ValueError("Missing invoice file")
-    if not Path(invoice_path).is_file():
-        messagebox.showerror("Error", f"Arvete fail ei eksisteeri: {invoice_path}")
-        raise ValueError("Invalid invoice path")
-    if not Path(clients_path).is_file():
-        messagebox.showerror("Error", f"Klientide fail ei eksisteeri: {clients_path}")
-        raise ValueError("Invalid clients path")
-    return invoice_path, clients_path
+    invoice = validate_file_exists(invoice_path, "Arvete fail")
+    clients = validate_file_exists(clients_path, "Klientide fail")
+    return invoice, clients
 
 
-def get_data_ready(
-    parent, invoice_var: str, clients_var: str, template_root, subject, body
-):
-    # global DEFAULT_SUBJECT
+def call_error(text):
+    messagebox.showerror("Viga", text)
+
+
+def _create_dest_directory(invoice_path: str):
+    parent = Path(invoice_path).resolve().parent
+    dest = parent / "arved"
+
+    # Try to create the directory (with parent, ignore if already exists)
     try:
-        invoice_path, clients_path = validate_files(
-            invoice_var.get(), clients_var.get()
-        )
-    except ValidationError as e:
-        messagebox.showerror("Viga", str(e))
-        return
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        log_exception(e)
+        raise ValidationError(f"Kausta loomine ebaõnnestus:\n{dest}\n\n{e}")
+    if not dest.exists() or not dest.is_dir():
+        raise ValidationError(f"Kausta ei õnnestunud luua:\n{dest}")
+    return dest
 
+
+def _process_ocr(invoice_path: str, cancel_flag, on_progress):
+    """Process the invoice PDF with OCR and return extracted invoices."""
+    try:
+        invoices = separate_invoices(
+            invoice_path,
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+        )
+    except pytesseract.TesseractError as e:
+        log_exception(e)
+        raise ValidationError(
+            f"OCR töötlemine ebaõnnestus. Kontrolli, kas Tesseract on õigesti paigaldatud.\n{e}"
+        )
+    return invoices
+
+
+def _save_and_open_invoices(
+    parent, invoices, dest: Path, template_root, persons, subject, body
+):
+    """Save invoices to files and open email editor."""
+    # After OK -> open the email editor
+    invoices_dir = save_each_invoice_as_file(
+        invoices, dest
+    )  # returns the full folder path to all individual invoices
+    parent.on_folder_created(str(invoices_dir))
+    open_email_editor(template_root, persons, invoices_dir, subject, body)
+
+
+def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
+    invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
+    
     # Show status bar
     parent.status_bar.pack(fill=X, side=BOTTOM)
     refit_window(parent)
@@ -118,133 +160,120 @@ def get_data_ready(
     # prep the cancel event
     parent.cancel_event.clear()
     parent.btn_cancel.configure(state=NORMAL)
+    return invoice_path, clients_path
 
-    def on_cancel_ui():
-        parent.status_label.config(text="Katkestatud")
-        parent.page_progress.config(value=0, mode="determinate")
-        parent.btn_cancel.configure(state=DISABLED)
+
+def on_cancel_ui(parent):
+    parent.status_label.config(text="Katkestatud")
+    parent.page_progress.config(value=0, mode="determinate")
+    parent.btn_cancel.configure(state=DISABLED)
+    parent.status_bar.pack_forget()
+
+
+def extract_person(clients_path: str, cancel_flag) :
+    persons = extract_person_data(clients_path) # raise ValidationError on error
+    if cancel_flag.is_set():
+        raise _Cancelled()
+    return persons
+
+
+def finalize_and_open(parent, invoices, dest, template_root, persons, subject, body):
+    """Finalize the process and open the email editor."""
+    try:
+        parent.page_progress.configure(value=HUNDRED_PERCENT)
+        parent.status_label.configure(text="Valmis")
+
+        # This blocks until the user clicks OK
+        messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+
+        if parent.cancel_event.is_set():
+            parent.after(0, lambda: on_cancel_ui(parent))
+            return
+
+        # Save and open invoices
+        _save_and_open_invoices(
+            parent, invoices, dest, template_root, persons, subject, body
+        )
+
+        # Hide status bar again
         parent.status_bar.pack_forget()
-
-    def worker():
+    except Exception as e:
+        log_exception(e)
         try:
-            # 1) Extract people (fast, stays here)
-            persons = extract_person_data(clients_path)
+            call_error(f"Töö ebaõnnestus:\n{e}")
+        except Exception as e2:
+            log_exception(e2)
+
+
+def worker(parent, invoice_path, clients_path, template_root, subject, body):
+    try:
+        # 1) Extract people
+        persons = extract_person(clients_path, parent.cancel_event)
+        if parent.cancel_event.is_set():
+            raise _Cancelled()
+
+        # 2) OCR read-through (emits per-page progress)
+        fname = os.path.basename(invoice_path)
+
+        def on_progress(page_number, total_pages):
             if parent.cancel_event.is_set():
-                print(f"Cancel event set after extracting persons")
                 raise _Cancelled()
+            _on_progress_ui(parent, page_number, total_pages, fname)
 
-            # 2) OCR read-through (emits per-page progress)
-            fname = os.path.basename(invoice_path)
+        # Process ocr
+        invoices = _process_ocr(invoice_path, parent.cancel_event, on_progress)
 
-            def on_progress(page_number, total_pages):
-                if parent.cancel_event.is_set():
-                    print(f"Cancel event set during OCR processing")
-                    raise _Cancelled()
-                _on_progress_ui(parent, page_number, total_pages, fname)
+        if parent.cancel_event.is_set():
+            raise _Cancelled()
+
+        # 3) Continue processing (back in main thread)
+        parent.after(
+            0, lambda: parent.status_label.configure(text="Töötlen andmeid...")
+        )
+
+        # 4) Create a destination folder
+        dest = _create_dest_directory(invoice_path)
+
+        if parent.cancel_event.is_set():
+            raise _Cancelled()
+
+        example_invoice = invoices[0]
+        subject = f"Arve {example_invoice.period} {example_invoice.year}"
+
+        # 5) Finalize and open email editor
+        parent.after(0, lambda: finalize_and_open(parent, invoices, dest, template_root, persons, subject, body))
+
+    except _Cancelled:
+        parent.after(0, lambda: on_cancel_ui(parent))
+        log_exception(_Cancelled("Operation cancelled by user."))
+    except ValidationError as e:
+        parent.after(0, lambda err=e: messagebox.showerror("Viga", str(err)))
+        log_exception(e)
+    except Exception as e:
+        parent.after(
+            0,
+            lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"),
+        )
+        log_exception(e)
+    finally:
+        parent.page_progress.config(value=0, mode="determinate")
 
 
-            try:
-                invoices = separate_invoices(
-                    invoice_path,
-                    on_progress=on_progress,
-                    cancel_flag=parent.cancel_event,
-                )
-            except pytesseract.TesseractError as e:
-                log_exception(e)
-                parent.after(
-                    0, lambda: messagebox.showerror("Viga", f"Tesseract OCR viga:\n{e}")
-                )
+def start_processing_thread(target, *args):
+    threading.Thread(target=lambda: target(*args), daemon=True).start()
 
-            if parent.cancel_event.is_set():
-                print(f"Cancel event set after OCR processing")
-                raise _Cancelled()
 
-            # 3) Continue processing (back in main thread)
-            parent.after(
-                0, lambda: parent.status_label.configure(text="Töötlen andmeid...")
-            )
+def get_data_ready(
+    parent, invoice_var: str, clients_var: str, template_root, subject, body
+):
+    try:
+        invoice_path, clients_path = validate_and_prepare_ui(parent, invoice_var, clients_var)
+    except ValidationError as ve:
+        messagebox.showerror("Viga", str(ve))
+        return
 
-            invoice_file_parent = Path(invoice_path).resolve().parent
-            dest = invoice_file_parent / "arved"
-
-            # Try to create the directory (with parent, ignore if already exists)
-            try:
-                dest.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                parent.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "Viga", f"Kausta loomine ebaõnnestus:\n{dest}\n\n{e}"
-                    ),
-                )
-                # sys.exit(1)
-                return
-
-            if parent.cancel_event.is_set():
-                print(f"Cancel event set after creating directory")
-                raise _Cancelled()
-
-            if not dest.exists() or not dest.is_dir():
-                parent.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "Viga", f"Kausta ei õnnestunud luua:\n{dest}"
-                    ),
-                )
-                # sys.exit(1)
-                return
-
-            example_invoice = invoices[0]
-            subject = "Arve " + example_invoice.period + " " + example_invoice.year
-
-            def show_message_and_then_open():
-                try:
-                    parent.page_progress.configure(value=100)
-                    parent.status_label.configure(text="Valmis")
-
-                    # This blocks until the user clicks OK
-                    messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
-
-                    if parent.cancel_event.is_set():
-                        on_cancel_ui()
-                        return
-
-                    # After OK -> open the email editor
-                    invoices_dir = save_each_invoice_as_file(
-                        invoices, dest
-                    )  # returns the full folder path to all individual invoices
-                    parent.on_folder_created(str(invoices_dir))
-                    open_email_editor(
-                        template_root, persons, invoices_dir, subject, body
-                    )
-
-                    # Hide status bar again
-                    parent.status_bar.pack_forget()
-                except Exception as e:
-                    log_exception(e)
-                    try:
-                        call_error(f"Töö ebaõnnestus:\n{e}")
-                    except:
-                        pass
-
-            parent.after(0, show_message_and_then_open)
-
-        except _Cancelled:
-            print("Operation cancelled by user (caught in worker).")
-            parent.after(0, on_cancel_ui)
-            log_exception(_Cancelled("Operation cancelled by user."))
-        except ValidationError as e:
-            parent.after(0, lambda err=e: messagebox.showerror("Viga", str(err)))
-        except Exception as e:
-            parent.after(
-                0,
-                lambda err=e: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"),
-            )
-        finally:
-            # parent.status_label.config(text="Valmis")
-            parent.page_progress.config(value=0, mode="determinate")
-
-    threading.Thread(target=worker, daemon=True).start()
+    # Start worker
+    start_processing_thread(worker, parent, invoice_path, clients_path, template_root, subject, body)
 
 
 def open_outlook(persons, invoices_dir, subject, body):
@@ -301,7 +330,7 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     btns_frame = tb.Frame(top)
     btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
 
-    def save_and_close(subject_var, subject, body):
+    def save_and_close(subject_var):
         subject_val = subject_var.get()
         body_val = body_text.get("1.0", tk.END).strip()
         body = body_val
@@ -314,17 +343,13 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
         btns_frame,
         text="Salvesta",
         bootstyle=SUCCESS,
-        command=lambda: save_and_close(subject_var, subject, body),
+        command=lambda: save_and_close(subject_var),
     ).pack(side=RIGHT, padx=6)
     tb.Button(
         btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy
     ).pack(side=RIGHT, padx=6)
 
     center_window(top, min_w=500, min_h=450, max_w=750)
-
-
-def call_error(text):
-    messagebox.ERROR(text)
 
 
 class _Cancelled(Exception):
