@@ -154,7 +154,7 @@ def _save_and_open_invoices(
 def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
     """Validate input files and prepare the UI for processing."""
     invoice_path, clients_path = validate_files(invoice_var.get(), clients_var.get())
-    
+
     # Show status bar
     parent.status_bar.pack(fill=X, side=BOTTOM)
     refit_window(parent)
@@ -179,7 +179,7 @@ def on_cancel_ui(parent):
 
 def extract_person(clients_path: str, cancel_flag):
     """Extract person data from the clients file."""
-    persons = extract_person_data(clients_path) # raise ValidationError on error
+    persons = extract_person_data(clients_path)  # raise ValidationError on error
     if cancel_flag.is_set():
         raise _Cancelled()
     return persons
@@ -252,9 +252,7 @@ def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag)
 def _worker_finalize_invoices(parent, invoices, invoice_path):
     """Finalize invoices and create destination folder."""
     # Continue processing (back in main thread)
-    parent.after(
-        0, lambda: parent.status_label.configure(text="Töötlen andmeid...")
-    )
+    parent.after(0, lambda: parent.status_label.configure(text="Töötlen andmeid..."))
 
     # 4) Create a destination folder
     dest = _create_dest_directory(invoice_path)
@@ -277,12 +275,15 @@ def worker(parent, invoice_path, clients_path, template_root, subject, body):
             parent, invoice_path, clients_path, parent.cancel_event
         )
 
-        dest, subject = _worker_finalize_invoices(
-            parent, invoices, invoice_path
-        )
+        dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
 
         # 5) Finalize and open email editor
-        parent.after(0, lambda: finalize_and_open(parent, invoices, dest, template_root, persons, subject, body))
+        parent.after(
+            0,
+            lambda: finalize_and_open(
+                parent, invoices, dest, template_root, persons, subject, body
+            ),
+        )
 
     except Exception as e:
         _handle_worker_error(parent, e)
@@ -300,13 +301,17 @@ def get_data_ready(
 ):
     """Validate inputs and start processing thread."""
     try:
-        invoice_path, clients_path = validate_and_prepare_ui(parent, invoice_var, clients_var)
+        invoice_path, clients_path = validate_and_prepare_ui(
+            parent, invoice_var, clients_var
+        )
     except ValidationError as ve:
         messagebox.showerror("Viga", str(ve))
         return
 
     # Start worker
-    start_processing_thread(worker, parent, invoice_path, clients_path, template_root, subject, body)
+    start_processing_thread(
+        worker, parent, invoice_path, clients_path, template_root, subject, body
+    )
 
 
 def open_outlook(persons, invoices_dir, subject, body):
@@ -320,62 +325,140 @@ def open_outlook(persons, invoices_dir, subject, body):
     save_emails_with_invoices(persons, invoices_dir, subject, body)
 
 
-def _create_email_subject_section(top, subject):
+def _create_email_subject_section(parent, subject):
     """Create the email subject entry section."""
     subject_var = tb.StringVar(value=subject)
-    tb.Label(top, text="Meili teema:", bootstyle=INFO).pack(
-        anchor="w", padx=12, pady=(12, 4)
+
+    # Row with label + reparation line
+    row = tb.Frame(parent)
+    row.pack(fill=X, pady=(0, 8))
+
+    tb.Label(
+        row, text="Meili teema:", bootstyle=INFO, font=("Segoe UI", 14, "bold")
+    ).pack(side=LEFT)
+    tb.Separator(row, orient=HORIZONTAL).pack(
+        side=LEFT, fill=X, expand=True, padx=(16, 0)
     )
-    tb.Entry(top, textvariable=subject_var, font=("Helvetica", 15)).pack(
-        fill=X, padx=12
-    )
-    return subject_var
+
+    subject_entry = tb.Entry(parent, textvariable=subject_var, font=("Segoe UI", 13))
+    subject_entry.pack(fill=X, pady=(0, 8), ipady=6)
+
+    tb.Label(
+        parent,
+        text="See kuvatakse meili pealkirjana",
+        bootstyle="secondary",
+        font=("Segoe UI", 10),
+    ).pack(anchor=W, pady=(0, 20))
+    return subject_var, subject_entry
 
 
-def _create_email_body_section(top, body):
+def _create_email_body_section(parent, body):
     """Create the email body text section."""
-    tb.Label(top, text="Meili sisu:", bootstyle=INFO).pack(
-        anchor="w", padx=12, pady=(12, 4)
+
+    row = tb.Frame(parent)
+    row.pack(fill=X, pady=(0, 8))
+
+    tb.Label(
+        row, text="Meili sisu:", bootstyle=INFO, font=("Segoe UI", 14, "bold")
+    ).pack(side=LEFT)
+    tb.Separator(row, orient=HORIZONTAL).pack(
+        side=LEFT, fill=X, expand=True, padx=(16, 0)
     )
 
     # Text + scrollbar in a frame that stretches
-    body_frame = tb.Frame(top)
-    body_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+    body_frame = tb.Frame(parent)
+    body_frame.pack(fill=BOTH, expand=True, pady=(0, 10))
 
-    body_text = tk.Text(body_frame, wrap=tk.WORD, font=("Helvetica", 15), height=10)
-    body_text.pack(side="left", fill="both", expand=True)
+    body_text = tk.Text(
+        body_frame,
+        wrap=tk.WORD,
+        font=("Segoe UI", 13),
+        padx=10,
+        pady=10,
+        bd=0,
+        highlightthickness=1,  # gives a subtle border
+        height=12,
+    )
+    body_text.pack(side=LEFT, fill=BOTH, expand=True)
 
-    yscroll = tb.Scrollbar(body_frame, orient="vertical", command=body_text.yview)
-    yscroll.pack(side="right", fill="y")
+    yscroll = tb.Scrollbar(
+        body_frame,
+        orient=VERTICAL,
+        command=body_text.yview,
+        bootstyle="secondary-round",
+    )
+    yscroll.pack(side=RIGHT, fill=Y)
     body_text.configure(yscrollcommand=yscroll.set)
 
-    body_text.insert(tk.END, body)
+    body_text.insert("1.0", body)
+
+    tb.Label(
+        parent,
+        text="Seda malli kasutatakse automaatselt kõigi valitud arvete saatmisel.",
+        bootstyle="secondary",
+        font=("Segoe UI", 10),
+    ).pack(anchor=W, pady=(4, 0))
+
     return body_text
 
 
-def _create_email_buttons_section(top, parent, persons, invoices_dir, subject_var, body_text):
-    """Create the email buttons section."""
-    btns_frame = tb.Frame(top)
-    btns_frame.pack(pady=12, padx=12, fill=X, side=BOTTOM)
+def save_and_close(parent, top, subject_var, body_text, persons, invoices_dir):
+    subject_val = subject_var.get()
+    body_val = body_text.get("1.0", "end-1c").strip()
 
-    def save_and_close(subject_var):
-        subject_val = subject_var.get()
-        body_val = body_text.get("1.0", tk.END).strip()
-        # body = body_val
-        # subject = subject_val
-        top.destroy()
-        open_outlook(persons, invoices_dir, subject_val, body_val)
-        parent.on_emails_saved()
+    # Basic validation
+    if not subject_val:
+        tb.dialogs.Messagebox.show_warning(
+            "Palun sisesta meili teema.", title="Puuduv teema", parent=top
+        )
+        log_exception("Meili teema on puudu.")
+        return
+    if not body_val:
+        tb.dialogs.Messagebox.show_warning(
+            "Palun sisesta meili sisu.", title="Puuduv sisu", parent=top
+        )
+        log_exception("Meili sisu on puudu.")
+        return
+
+    top.destroy()
+    open_outlook(persons, invoices_dir, subject_val, body_val)
+    parent.on_emails_saved()
+
+
+def _cancel_email_editor(top, parent):
+    top.destroy()
+
+    # Re-enable cancel button if needed
+    try:
+        parent.btn_cancel.configure(state=NORMAL)
+    except Exception as e:
+        log_exception(e)
+
+
+def _create_email_buttons_section(
+    top, container, parent, persons, invoices_dir, subject_var, body_text
+):
+    """Create the email buttons section."""
+    btns_frame = tb.Frame(container)
+    btns_frame.pack(pady=(18, 0), fill=X, side=BOTTOM)
 
     tb.Button(
         btns_frame,
         text="Salvesta",
         bootstyle=SUCCESS,
-        command=lambda: save_and_close(subject_var),
-    ).pack(side=RIGHT, padx=6)
+        width=12,
+        command=lambda: save_and_close(
+            parent, top, subject_var, body_text, persons, invoices_dir
+        ),
+    ).pack(side=LEFT, ipady=6)
+
     tb.Button(
-        btns_frame, text="Tühista", bootstyle=SECONDARY, command=top.destroy
-    ).pack(side=RIGHT, padx=6)
+        btns_frame,
+        text="Tühista",
+        bootstyle=SECONDARY,
+        command=lambda: _cancel_email_editor(top, parent),
+        width=12,
+    ).pack(side=LEFT, padx=(0, 12), ipady=6)
 
 
 def open_email_editor(parent, persons, invoices_dir, subject, body):
@@ -388,21 +471,51 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     top.transient(parent)
     top.grab_set()
 
+    # Size + basic behavior
+    top.minsize(760, 520)
+    top.geometry("900x620")
+    top.resizable()
+
+    # Use one padded container for clean spacing
+    container = tb.Frame(top, padding=24)
+    container.pack(fill=BOTH, expand=True)
+
     style = tb.Style()
     style.configure("info.TLabel", font=("Helvetica", 15))
 
     # Subject
-    subject_var = _create_email_subject_section(top, subject)
+    subject_var, subject_entry = _create_email_subject_section(container, subject)
 
     # Body
-    body_text = _create_email_body_section(top, body)
+    body_text = _create_email_body_section(container, body)
 
     # Buttons
     _create_email_buttons_section(
-        top, parent, persons, invoices_dir, subject_var, body_text
+        top, container, parent, persons, invoices_dir, subject_var, body_text
     )
 
-    center_window(top, min_w=500, min_h=450, max_w=750)
+    # Keyboard shortcuts + nicer flow
+    subject_entry.bind("<Return>", lambda e: (body_text.focus_set(), "break"))
+    top.bind("<Escape>", lambda e: _cancel_email_editor(top, parent))
+    top.bind(
+        "<Control-s>",
+        lambda e: save_and_close(
+            parent, top, subject_var, body_text, persons, invoices_dir
+        ),
+    )
+    top.bind(
+        "<Control-S>",
+        lambda e: save_and_close(
+            parent, top, subject_var, body_text, persons, invoices_dir
+        ),
+    )
+
+    # Focus
+    subject_entry.focus_set()
+    subject_entry.selection_range(0, END)
+
+    center_window(top, min_w=760, min_h=520, max_w=960)
+
 
 class _Cancelled(Exception):
     # "Operation cancelled by user."
