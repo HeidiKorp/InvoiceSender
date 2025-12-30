@@ -46,41 +46,89 @@ def clear_outlook_cache():
         log_exception(e)
 
 
-def ensure_outlook_ready(timeout=120):
+def _try_start_outlook():
+    try:
+        outlook_path = get_outlook_path()
+        if not outlook_path or not os.path.exists(outlook_path):
+            return False
+        subprocess.Popen(
+            [outlook_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return True
+    except Exception:
+        return False
+
+def ensure_outlook_ready(timeout=15):
     """
-    Ensure that Outlook is running and ready to send emails. If Outlook is not configured, this will
-    show the Outlook logon/profile dialog so you can finish setup.
+    Non-interactive readiness check. 
+    - No profile dialogs
+    - Works in a background thread.
+    - If outlook isn't configured/ready, raises RuntimeError
     """
     start = time.time()
     app = None
 
-    try:
-        subprocess.Popen(
-            [get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-    except Exception as e:
-        print(f"Could not start Outlook. Please ensure it is installed. Error: {e}")
-        pass
+    _try_start_outlook()
 
     while time.time() - start < timeout:
-        try:
-            app = win32.gencache.EnsureDispatch("Outlook.Application")
+        try: # Try attach to running Outlook first (often fastest)
+            try:
+                app = win32.GetActiveObject("Outlook.Application")
+            except Exception:
+                app = win32.DispatchEx("Outlook.Application")
+            
             session = app.GetNamespace("MAPI")
-            # profile, password, showDoalog, newSession
-            session.Logon(
-                "", "", True, True
-            )  # This will prompt for profile if not configured
+
+            # IMPORTANT: do NOT show dialogs from background thread
+            session.Logon("", "", False, False)
+
             _ = session.Accounts  # Accessing Accounts to ensure it's fully loaded
-            return app
-        except com_error:
-            time.sleep(2)
+            return True
+
+        except com_error as e:
+            last_err = e
+            time.sleep(0.5)
+
+        except Exception as e:
+            last_err = e
+            time.sleep(0.5)
+
+        try:
+            pythoncom.PumpWaitingMessages()
         except Exception:
-            time.sleep(2)
+            pass
+
     raise RuntimeError(
-        "Outlook did not become ready in time. "
-        "Open Outlook manually, finish the setup wizard"
-        "then rerun the script."
-    )
+        "Outlook ei ole valmis. Ava Outlook käsitsi, vali profiil (kui küsib) ja proovi uuesti."
+    ) from last_err
+
+    # try:
+    #     subprocess.Popen(
+    #         [get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    #     )
+    # except Exception as e:
+    #     print(f"Could not start Outlook. Please ensure it is installed. Error: {e}")
+    #     pass
+
+    # while time.time() - start < timeout:
+    #     try:
+    #         app = win32.gencache.EnsureDispatch("Outlook.Application")
+    #         session = app.GetNamespace("MAPI")
+    #         # profile, password, showDoalog, newSession
+    #         session.Logon(
+    #             "", "", True, True
+    #         )  # This will prompt for profile if not configured
+    #         _ = session.Accounts  # Accessing Accounts to ensure it's fully loaded
+    #         return app
+    #     except com_error:
+    #         time.sleep(2)
+    #     except Exception:
+    #         time.sleep(2)
+    # raise RuntimeError(
+    #     "Outlook did not become ready in time. "
+    #     "Open Outlook manually, finish the setup wizard"
+    #     "then rerun the script."
+    # )
 
 
 def apartments_from_persons(persons):

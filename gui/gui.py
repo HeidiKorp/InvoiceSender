@@ -13,7 +13,7 @@ from utils.logging_helper import (
     delete_old_error_log,
     _thread_excepthook,
 )
-from utils.file_utils import delete_folder, read_config
+from utils.file_utils import delete_folder, read_config, load_invoice_types, load_app_version, load_app_name
 from utils.ocr_helper import get_tesseract_cmd, check_ocr_environment
 from utils.gui_helpers import (
     select_file,
@@ -54,6 +54,7 @@ def _setup_exception_handler(root):
     Args:
         root: The main application window (ttkbootstrap Window).
     """
+
     # Attach a global exception handler to the TK root so uncaught exceptions are logged
     def tk_report_callback_exception(exc_type, exc_value, exc_tb):
         # Log it
@@ -78,13 +79,15 @@ def _configure_styles(style):
         style: The ttkbootstrap Style object.
     """
     # Centralize style configuration
-    style.configure("TButton", font=("Helvetica", 15))
-    style.configure("success.TButton", font=("Helvetica", 15))
-    style.configure("TLabel", font=("Helvetica", 15))
-    style.configure("info.TLabel", font=("Helvetica", 15))
+    style.configure("TButton", font=("Helvetica", 14))
+    style.configure("success.TButton", font=("Helvetica", 14))
+    style.configure("TLabel", font=("Helvetica", 14))
+    style.configure("info.TLabel", font=("Helvetica", 14))
+
+    style.configure("Path.TLabel", font=("Helvetica", 11))
 
 
-def _setup_window_properties(root, config):
+def _setup_window_properties(root, app_name):
     """
     Set up window title, resizability, and shared state on the root window.
     Args:
@@ -92,7 +95,7 @@ def _setup_window_properties(root, config):
         config: The configuration object.
     """
     # --- Window properties ---
-    root.title(config.get("app", "NAME", fallback="Arvete Saatja"))
+    root.title(app_name)
     root.resizable(True, True)
 
     # --- Shared state ---
@@ -100,14 +103,14 @@ def _setup_window_properties(root, config):
     root.current_worker = None
 
 
-def _create_version_label(root, config):
+def _create_version_label(root, version):
     """
     Create the version label at the top-right corner of the window.
     Returns the created label.
     """
     version_label = tb.Label(
         root,
-        text="Versioon " + config.get("app", "VERSION", fallback="1.0.0"),
+        text="Versioon " + version,
         bootstyle=INFO,
         font=("Helvetica", 10),
     )
@@ -137,21 +140,13 @@ def _create_status_bar(root):
     root.status_bar = status_bar  # store reference on root so we can show/hide later
 
 
-def _create_bottom_bar(root, invoice_var, clients_var, subject, body):
+def _create_bottom_bar(root):
     """
     Create the bottom bar with "Koosta meilid" and "Katkesta" buttons.
     Returns the created bottom bar frame.
     """
     bottom_bar = tb.Frame(root)
     bottom_bar.pack(fill=X, side=BOTTOM)
-    tb.Button(
-        bottom_bar,
-        text="Koosta meilid",
-        bootstyle="success",
-        command=lambda: get_data_ready(
-            root, invoice_var, clients_var, root, subject, body
-        ),
-    ).pack(side=RIGHT, padx=12, pady=12)
 
     # --- Cancel button ---
     root.btn_cancel = tb.Button(
@@ -160,9 +155,47 @@ def _create_bottom_bar(root, invoice_var, clients_var, subject, body):
         bootstyle="danger",
         command=lambda: cancel_current_job(root),
     )
-    root.btn_cancel.pack(side=RIGHT, padx=0, pady=12)
+    root.btn_cancel.pack(side=LEFT, padx=(12, 6), pady=12)
     root.btn_cancel.configure(state=DISABLED)
     return bottom_bar
+
+
+def _set_invoice_type_style(root, left_style, right_style):
+    root.btn_type_left.configure(bootstyle=left_style)
+    root.btn_type_right.configure(bootstyle=right_style)
+
+
+def _apply_content_type_gate(root):
+    key = root.content_type_var.get()
+    enabled = key in root.invoice_types
+
+    # Hint text only when nothing selected
+    root.lbl_type_hint.configure(text="" if enabled else root.type_hint)
+
+    # Styling: selected card is filled info, other is outline
+    if key == getattr(root, "type_left_key", None):
+        _set_invoice_type_style(root, INFO, "info-outline")
+    elif key == getattr(root, "type_right_key", None):
+        _set_invoice_type_style(root, "info-outline", INFO)
+    else:
+        _set_invoice_type_style(root, "info-outline", "info-outline")
+
+    # Disable/enable other controls (but keep them visible)
+    state = NORMAL if enabled else DISABLED
+
+    for widget in (
+        root.btn_invoice,
+        root.btn_clients,
+        root.btn_compose,
+    ):
+        widget.configure(state=state)
+
+    for name in ("btn_delete_invoices", "btn_send_drafts"):
+        if hasattr(root, name):
+            try:
+                getattr(root, name).configure(state=state)
+            except Exception:
+                pass
 
 
 def _setup_delete_button_handlers(root, parent):
@@ -205,7 +238,7 @@ def _setup_delete_button_handlers(root, parent):
 
 def _setup_send_drafts_button_handlers(root, parent):
     """
-    Create the "Saada mustandid" button attached to 'parent' and 
+    Create the "Saada mustandid" button attached to 'parent' and
     set up on_emails_saved / hide_send_drafts_button handlers on 'root'.
     The button is initially hidden and only shown when emails are saved.
     """
@@ -238,64 +271,228 @@ def _setup_send_drafts_button_handlers(root, parent):
     root.hide_send_drafts_button = hide_send_drafts_button
 
 
-def _create_content_area(root, invoice_var, clients_var):
-    """
-    Create the main content area with file selection buttons and labels.
-    Returns the created content frame.
-    """
-    content = tb.Frame(root)
-    content.pack(expand=True)
+# def _create_content_area(root, invoice_var, clients_var):
+#     """
+#     Create the main content area with file selection buttons and labels.
+#     Returns the created content frame.
+#     """
+#     content = tb.Frame(root)
+#     content.pack(expand=True)
 
-    # Invoice
-    btn_text_invoice = tk.StringVar(value="Vali arvete fail")
-    btn_invoice = tb.Button(
-        content,
-        textvariable=btn_text_invoice,
+#     # Make one column centered
+#     content.grid_columnconfigure(0, weight=1)
+
+#     # Invoice
+#     root.btn_text_invoice = tk.StringVar(value="Vali arvete fail")
+#     root.btn_invoice = tb.Button(
+#         content,
+#         textvariable=root.btn_text_invoice,
+#         bootstyle=INFO,
+#         command=lambda: select_file(
+#             invoice_var,
+#             [("PDF files", "*.pdf")],
+#             root.btn_text_invoice,
+#             "Muuda arvete faili",
+#         ),
+#     )
+#     root.btn_invoice.grid(row=0, column=0, padx=12, pady=(6, 10), ipady=10)
+#     root.lbl_invoice = tb.Label(
+#         content, textvariable=invoice_var, wraplength=760, foreground="#9aa0a6"
+#     )
+#     root.lbl_invoice.grid(row=1, column=0, padx=12, pady=(0, 16))
+
+#     # Clients
+#     root.btn_text_clients = tk.StringVar(value="Vali klientide fail")
+#     root.btn_clients = tb.Button(
+#         content,
+#         textvariable=root.btn_text_clients,
+#         bootstyle=INFO,
+#         command=lambda: select_file(
+#             clients_var,
+#             [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
+#             root.btn_text_clients,
+#             "Muuda klientide faili",
+#         ),
+#     )
+#     root.btn_clients.grid(row=2, column=0, padx=12, pady=(0, 10), ipady=10)
+#     root.lbl_clients = tb.Label(
+#         content, textvariable=clients_var, wraplength=720, foreground="#9aa0a6"
+#     )
+#     root.lbl_clients.grid(row=3, column=0, padx=12, pady=(0, 6))
+#     return content
+
+
+def _create_section_header(parent, title: str):
+    # Header row: title + separation line
+    row = tb.Frame(parent)
+    row.pack(fill=X, pady=(0, 10))
+    tb.Label(row, text=title, bootstyle=INFO, font=("Helvetica", 18, "bold")).pack(
+        side=LEFT
+    )
+    tb.Separator(row, orient=HORIZONTAL).pack(
+        side=LEFT, fill=X, expand=True, padx=(16, 0)
+    )
+
+
+def _create_file_buttons(root, parent, invoice_var, clients_var):
+    # Invoice row
+    root.btn_text_invoice = tk.StringVar(value="Vali arvete fail")
+    root.btn_invoice = tb.Button(
+        parent,
+        textvariable=root.btn_text_invoice,
         bootstyle=INFO,
         command=lambda: select_file(
             invoice_var,
             [("PDF files", "*.pdf")],
-            btn_text_invoice,
+            root.btn_text_invoice,
             "Muuda arvete faili",
         ),
     )
-    btn_invoice.grid(row=0, column=0, padx=22, pady=22)
-    lbl_invoice = tb.Label(
-        content, textvariable=invoice_var, wraplength=680, foreground="#9aa0a6"
+    root.btn_invoice.grid(
+        row=0, column=0, sticky="w", padx=(0, 12), pady=(0, 10), ipady=8
     )
-    lbl_invoice.grid(row=1, column=0, padx=12, pady=12)
 
-    # Clients
-    btn_text_clients = tk.StringVar(value="Vali klientide fail")
-    btn_clients = tb.Button(
-        content,
-        textvariable=btn_text_clients,
+    root.lbl_invoice = tb.Label(
+        parent,
+        textvariable=invoice_var,
+        style="Path.TLabel",
+        foreground="#9aa0a6",
+        wraplength=650,
+        anchor="w",
+        justify="left",
+    )
+    root.lbl_invoice.grid(row=0, column=1, sticky="w", pady=(0, 10))
+
+    # Clients row
+    root.btn_text_clients = tk.StringVar(value="Vali klientide fail")
+    root.btn_clients = tb.Button(
+        parent,
+        textvariable=root.btn_text_clients,
         bootstyle=INFO,
         command=lambda: select_file(
             clients_var,
             [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
-            btn_text_clients,
+            root.btn_text_clients,
             "Muuda klientide faili",
         ),
     )
-    btn_clients.grid(row=2, column=0, padx=12, pady=12)
-    lbl_clients = tb.Label(
-        content, textvariable=clients_var, wraplength=680, foreground="#9aa0a6"
+    root.btn_clients.grid(
+        row=1, column=0, sticky="w", padx=(0, 12), pady=(0, 0), ipady=8
     )
-    lbl_clients.grid(row=3, column=0, padx=12, pady=12)
+    root.lbl_clients = tb.Label(
+        parent,
+        textvariable=clients_var,
+        style="Path.TLabel",
+        foreground="#9aa0a6",
+        wraplength=650,
+        anchor="w",
+        justify="left",
+    )
+    root.lbl_clients.grid(row=1, column=1, sticky="w")
 
-    # Center the column
-    content.grid_columnconfigure(0, weight=1)
-    return content
+
+def _create_files_section(root, parent, invoice_var, clients_var):
+    section = tb.Frame(parent)
+    section.pack(fill=X, pady=(0, 18))
+
+    _create_section_header(section, "Failid")
+
+    grid = tb.Frame(section)
+    grid.pack(fill=X)
+
+    grid.grid_columnconfigure(0, weight=0)  # buttons
+    grid.grid_columnconfigure(1, weight=1)  # paths
+
+    _create_file_buttons(root, grid, invoice_var, clients_var)
 
 
-def _setup_ui_components(root, config, invoice_var, clients_var, subject, body):
+def _set_type(root, key: str):
+    root.content_type_var.set(key)
+    _apply_content_type_gate(root)
+
+
+def _create_invoice_type_section(root, parent):
+    _create_section_header(parent, "Arvete tüüp")
+
+    row = tb.Frame(parent)
+    row.pack(fill=X)
+
+    invoice_types = list(root.invoice_types.values())
+    type_left, type_right = invoice_types[0], invoice_types[1]
+
+    # Store keys so gate styling can compare by key
+    root.type_left_key = type_left.key
+    root.type_right_key = type_right.key
+
+    # "Radio-card" style buttons
+    root.btn_type_left = tb.Button(
+        row,
+        text=type_left.label,
+        bootstyle="info-outline",
+        command=lambda: _set_type(root, type_left.key),
+    )
+    root.btn_type_left.pack(side=LEFT, fill=X, expand=True, ipady=10, padx=(0, 12))
+
+    root.btn_type_right = tb.Button(
+        row,
+        text=type_right.label,
+        bootstyle="info-outline",
+        command=lambda: _set_type(root, type_right.key),
+    )
+    root.btn_type_right.pack(side=LEFT, fill=X, expand=True, ipady=10)
+
+    # Helper text
+    root.lbl_type_hint = tb.Label(parent, text=root.type_hint, bootstyle="secondary")
+    root.lbl_type_hint.pack(anchor=W, pady=(10, 0))
+
+    # root.content_type_var = content_type_var
+
+
+def _create_mail_section(root, parent, invoice_var, clients_var):
+    section = tb.Frame(parent)
+    section.pack(fill=X, pady=(0, 8))
+
+    _create_section_header(section, "Meil")
+
+    root.btn_compose = tb.Button(
+        section,
+        text="Koosta meilid",
+        bootstyle="success",
+        command=lambda: get_data_ready(
+            root, invoice_var, clients_var, root, root.content_type_var
+        ),
+    )
+    root.btn_compose.pack(anchor=W, ipady=10, ipadx=18)
+
+    tb.Label(
+        section,
+        text="Muuda teemat ja sisu enne saatmist",
+        bootstyle="secondary",
+        font=("Helvetica", 12),
+    ).pack(anchor=W, pady=(10, 0))
+
+
+def _setup_ui_components(
+    root, version, invoice_var, clients_var, content_type_var
+):
     """Set up all UI components."""
     # --- Version label (top right) ---
-    _create_version_label(root, config)
+    _create_version_label(root, version)
+
+    # --- One main container for consistent padding ---
+    container = tb.Frame(root, padding=24)
+    container.pack(fill=BOTH, expand=True)
+
+    # --- Invoice type selector ---
+    _create_invoice_type_section(root, container)
+
+    # --- Middle: files + mail sections
+    _create_files_section(root, container, invoice_var, clients_var)
+
+    _create_mail_section(root, container, invoice_var, clients_var)
 
     # --- Bottom bar ---
-    bottom_bar = _create_bottom_bar(root, invoice_var, clients_var, subject, body)
+    bottom_bar = _create_bottom_bar(root)
 
     # --- Status bar (bottom, above the button row) ---
     _create_status_bar(root)
@@ -306,8 +503,14 @@ def _setup_ui_components(root, config, invoice_var, clients_var, subject, body):
     # --- Send drafts button handlers ---
     _setup_send_drafts_button_handlers(root, bottom_bar)
 
+    # # Make big compose button do the same as bottom compose button
+    # root.btn_compose.configure(command=root.btn_compose.cget("command"))
+
     # --- Content area ---
-    content = _create_content_area(root, invoice_var, clients_var)
+    # content = _create_content_area(root, invoice_var, clients_var)
+
+    # --- Apply initial disabled state until type chosen
+    _apply_content_type_gate(root)
 
 
 def main():
@@ -319,11 +522,11 @@ def main():
         return
 
     # --- Set up default subject, body ---
-    subject = "Arve"
-    body = (
-        "Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri "
-        "kuu kulude arve. See on automaatteavitus, palume mitte vastata."
-    )
+    # subject = "Arve"
+    # body = (
+    #     "Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri "
+    #     "kuu kulude arve. See on automaatteavitus, palume mitte vastata."
+    # )
 
     # --- Start window setup ---
     root = tb.Window(themename="superhero")
@@ -336,15 +539,20 @@ def main():
     _configure_styles(style)
 
     # --- Set up window properties ---
-    _setup_window_properties(root, config)
+    version = load_app_version(config)
+    app_name = load_app_name(config)
+    _setup_window_properties(root, app_name)
 
     invoice_var = tb.StringVar()
     clients_var = tb.StringVar()
+    root.invoice_types, root.type_hint = load_invoice_types(config)
+    root.content_type_var = tb.StringVar(value="")  # "", "kommunaal", "kyte"
 
     # --- Create UI components ---
-    _setup_ui_components(root, config, invoice_var, clients_var, subject, body)
+    _setup_ui_components(
+        root, version, invoice_var, clients_var, root.content_type_var)
 
-    center_window(root, min_w=500, min_h=500, max_w=700)
+    center_window(root, min_w=800, min_h=650, max_w=980)
     # root.update_idletasks()
     root.deiconify()
     root.lift()

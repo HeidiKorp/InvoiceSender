@@ -2,12 +2,56 @@ from pathlib import Path
 from tkinter import messagebox
 import shutil, os, sys
 import configparser
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class InvoiceType:
+    key: str
+    label: str
+    subject: str
+    body: str
+
+
+def load_app_version(config):
+    return config.get("app", "VERSION", fallback="1.0.0")
+
+
+def load_app_name(config):
+    config.get("app", "NAME", fallback="Arvete Saatja")
+    
+
+def load_invoice_types(config):
+    """Loads two types from config.cfg"""
+    hint = config.get("ui", "TYPE_HINT")
+
+    def read_section(section: str) -> InvoiceType:
+        return InvoiceType(
+            key=config.get(section, "KEY"),
+            label=config.get(section, "LABEL"),
+            subject=config.get(section, "SUBJECT"),
+            body=config.get(section, "BODY").replace("\\n", "\n")
+        )
+    t1 = read_section("invoice_type_kommunaal")
+    t2 = read_section("invoice_type_kyte")
+
+    types = {t1.key: t1, t2.key: t2}
+    return types, hint
+
 
 def read_config():
     config = configparser.ConfigParser()
     config_path = Path(__file__).parent.parent / "config.cfg"
-    config.read(config_path)
-    return config
+
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            config.read_file(f)
+        return config
+    except UnicodeDecodeError:
+        # Fallback if the file was saved in legacy Windows encoding
+        with config_path.open("r", encoding="cp1252") as f:
+            config.read_file(f)
+        return config
+
 
 def delete_folder(root, path_str):
     path = Path(path_str)

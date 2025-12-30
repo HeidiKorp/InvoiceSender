@@ -5,6 +5,8 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 import threading, os, re
 import pytesseract
+import traceback
+import pythoncom
 
 from utils.logging_helper import log_exception
 from src.pdf_extractor import separate_invoices, save_each_invoice_as_file
@@ -75,15 +77,19 @@ def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
 def _on_progress_ui(parent, page_number, total_pages, fname):
     """Update progress bar and status label in the GUI thread."""
     pct = int(page_number / total_pages * HUNDRED_PERCENT) if total_pages else 0
-    parent.after(
-        0,
-        lambda: (
-            parent.page_progress.config(value=pct),
-            parent.status_label.configure(
-                text=f"PDF leht {page_number}/{total_pages} - {fname}"
-            ),
-        ),
-    )
+
+    def apply():
+        # Ensure status bar is visible (in case it wasn't packed)
+        try:
+            parent.status_bar.pack(fill=X, side=BOTTOM)
+        except Exception:
+            pass
+
+        parent.page_progress.configure(value=pct, mode="determinate")
+        parent.status_label.configure(text=f"PDF leht {page_number}/{total_pages} - {fname}")
+        parent.update_idletasks()
+
+    parent.after(0, apply)
 
 
 def validate_file_exists(path: str, label: str) -> str:
@@ -139,6 +145,11 @@ def _process_ocr(invoice_path: str, cancel_flag, on_progress):
     return invoices
 
 
+def get_selected_invoice_type(root):
+    key = root.content_type_var.get()
+    return root.invoice_types.get(key)
+
+
 def _save_and_open_invoices(
     parent, invoices, dest: Path, template_root, persons, subject, body
 ):
@@ -159,13 +170,13 @@ def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
     parent.status_bar.pack(fill=X, side=BOTTOM)
     refit_window(parent)
 
-    # Reset status UI
-    parent.status_label.config(text="Alustan...")
-    parent.page_progress.config(value=0, mode="determinate")
-
     # prep the cancel event
     parent.cancel_event.clear()
     parent.btn_cancel.configure(state=NORMAL)
+
+    # Schedule UI work on the Tk main thread
+    parent.update_idletasks()
+
     return invoice_path, clients_path
 
 
@@ -229,7 +240,7 @@ def _handle_worker_error(parent, err):
         log_exception(err)
 
 
-def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag):
+def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag, fname):
     """Extract invoices and persons data."""
     # Extract people
     persons = extract_person(clients_path, parent.cancel_event)
@@ -271,8 +282,12 @@ def worker(parent, invoice_path, clients_path, template_root, subject, body):
         # OCR read-through (emits per-page progress)
         fname = os.path.basename(invoice_path)
 
+        parent.after(0, lambda: parent.status_bar.pack(fill=X, side=BOTTOM))
+        parent.after(0, lambda: parent.status_label.configure(text="Alustan..."))
+        parent.after(0, lambda: parent.page_progress.configure(value=0, mode="determinate"))
+
         persons, invoices = _worker_extract_and_process(
-            parent, invoice_path, clients_path, parent.cancel_event
+            parent, invoice_path, clients_path, parent.cancel_event, fname
         )
 
         dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
@@ -288,7 +303,10 @@ def worker(parent, invoice_path, clients_path, template_root, subject, body):
     except Exception as e:
         _handle_worker_error(parent, e)
     finally:
-        parent.page_progress.config(value=0, mode="determinate")
+        def cleanup():
+            parent.page_progress.configure(value=0, mode="determinate")
+            parent.btn_cancel.configure(state=DISABLED)
+        parent.after(0, cleanup)
 
 
 def start_processing_thread(target, *args):
@@ -297,9 +315,27 @@ def start_processing_thread(target, *args):
 
 
 def get_data_ready(
-    parent, invoice_var: str, clients_var: str, template_root, subject, body
+    parent,
+    invoice_var: str,
+    clients_var: str,
+    template_root,
+    content_type_var,
 ):
     """Validate inputs and start processing thread."""
+    type_key = content_type_var.get()
+    invoice_type = parent.invoice_types.get(type_key)
+
+    if invoice_type is None:
+        return  # Shouldn't happen because UI disabled buttons
+
+    subject = invoice_type.subject
+    body = invoice_type.body
+
+    print(f'Subject is: {subject}')
+    print(f'Body is: {body}')
+    # TODO: get month and year here
+    # TODO: remove passing sobject and body here
+    # subject = invoice_type.subject.format()
     try:
         invoice_path, clients_path = validate_and_prepare_ui(
             parent, invoice_var, clients_var
@@ -309,8 +345,11 @@ def get_data_ready(
         return
 
     # Start worker
-    start_processing_thread(
-        worker, parent, invoice_path, clients_path, template_root, subject, body
+    parent.after(
+        10,
+        lambda: start_processing_thread(
+            worker, parent, invoice_path, clients_path, template_root, subject, body
+        ),
     )
 
 
@@ -318,6 +357,7 @@ def open_outlook(persons, invoices_dir, subject, body):
     """Open Outlook email editor with prepared emails."""
     # Compose emails and send them
     ensure_outlook_ready()
+    print("After outlook is opened")
     try:
         validate_persons_vs_invoices(persons, invoices_dir)
     except ValidationError as e:
@@ -402,27 +442,100 @@ def _create_email_body_section(parent, body):
     return body_text
 
 
-def save_and_close(parent, top, subject_var, body_text, persons, invoices_dir):
-    subject_val = subject_var.get()
-    body_val = body_text.get("1.0", "end-1c").strip()
+def _validate_email_inputs(top, subject_var, body_text):
+    subject = subject_var.get().strip()
+    body = body_text.get("1.0", "end-1c").strip()
 
-    # Basic validation
-    if not subject_val:
+    if not subject:
         tb.dialogs.Messagebox.show_warning(
             "Palun sisesta meili teema.", title="Puuduv teema", parent=top
         )
         log_exception("Meili teema on puudu.")
         return
-    if not body_val:
+    if not body:
         tb.dialogs.Messagebox.show_warning(
             "Palun sisesta meili sisu.", title="Puuduv sisu", parent=top
         )
         log_exception("Meili sisu on puudu.")
         return
+    
+    return subject, body
 
+
+def _close_email_editor(top):
+    try:
+        top.grab_release()
+    except Exception:
+        pass
     top.destroy()
-    open_outlook(persons, invoices_dir, subject_val, body_val)
-    parent.on_emails_saved()
+
+
+def _show_email_saving_ui(parent):
+    def ui():
+        try:
+            parent.status_bar.pack(fill=X, side=BOTTOM)
+            parent.status_label.configure(text="Koostan mustandeid...")
+            parent.page_progress.configure(mode="indeterminate")
+            parent.page_progress.start(10)
+        except Exception:
+            pass
+        parent.update_idletasks()
+    parent.after(0, ui)
+
+
+def _run_outlook_job_async(parent, persons, invoices_dir, subject, body):
+    def job():
+        print("THREAD: started")
+        pythoncom.CoInitialize()
+        print("THREAD: COM initialized")
+        try:
+            print("THREAD: before open_outlook")
+            open_outlook(persons, invoices_dir, subject, body)
+            print("THREAD: after open_outlook")
+
+            parent.after(0, parent.on_emails_saved)
+            parent.after(0, lambda: parent.status_label.configure(text="Mustandid loodud"))
+
+        except Exception as e:
+            print("THREAD: exception", e)
+            log_exception(f'Viga mustandite loomisel: {e}')
+            traceback_str = traceback.format_exc()
+            print(traceback.format_exc())
+            parent.after(
+                0,
+                lambda: messagebox.showerror("Viga", f"{e}]\n\n{traceback_str}")
+            )
+        finally:
+            print("THREAD: cleanup")
+            pythoncom.CoUninitialize()
+            def cleanup():
+                try:
+                    parent.page_progress.stop()
+                    parent.page_progress.configure(mode="determinate", value=0)
+                except Exception:
+                    pass
+            parent.after(0, cleanup)
+
+    threading.Thread(target=job, daemon=True).start()
+
+
+def save_and_close(parent, top, subject_var, body_text, persons, invoices_dir):
+    # Basic validation
+    result = _validate_email_inputs(top, subject_var, body_text)
+
+    if not result:
+        return
+
+    subject, body = result
+    _close_email_editor(top)
+    _show_email_saving_ui(parent)
+
+    _run_outlook_job_async(parent, persons, invoices_dir, subject, body)
+    # top.destroy()
+    # print(f'Before open outlook')
+    # open_outlook(persons, invoices_dir, subject_val, body_val)
+    # print(f'After open outlook')
+    # parent.on_emails_saved()
 
 
 def _cancel_email_editor(top, parent):
