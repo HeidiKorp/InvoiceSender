@@ -331,11 +331,6 @@ def get_data_ready(
     subject = invoice_type.subject
     body = invoice_type.body
 
-    print(f'Subject is: {subject}')
-    print(f'Body is: {body}')
-    # TODO: get month and year here
-    # TODO: remove passing sobject and body here
-    # subject = invoice_type.subject.format()
     try:
         invoice_path, clients_path = validate_and_prepare_ui(
             parent, invoice_var, clients_var
@@ -357,7 +352,6 @@ def open_outlook(persons, invoices_dir, subject, body):
     """Open Outlook email editor with prepared emails."""
     # Compose emails and send them
     ensure_outlook_ready()
-    print("After outlook is opened")
     try:
         validate_persons_vs_invoices(persons, invoices_dir)
     except ValidationError as e:
@@ -485,28 +479,21 @@ def _show_email_saving_ui(parent):
 
 def _run_outlook_job_async(parent, persons, invoices_dir, subject, body):
     def job():
-        print("THREAD: started")
         pythoncom.CoInitialize()
-        print("THREAD: COM initialized")
         try:
-            print("THREAD: before open_outlook")
             open_outlook(persons, invoices_dir, subject, body)
-            print("THREAD: after open_outlook")
 
             parent.after(0, parent.on_emails_saved)
             parent.after(0, lambda: parent.status_label.configure(text="Mustandid loodud"))
 
         except Exception as e:
-            print("THREAD: exception", e)
             log_exception(f'Viga mustandite loomisel: {e}')
             traceback_str = traceback.format_exc()
-            print(traceback.format_exc())
             parent.after(
                 0,
                 lambda: messagebox.showerror("Viga", f"{e}]\n\n{traceback_str}")
             )
         finally:
-            print("THREAD: cleanup")
             pythoncom.CoUninitialize()
             def cleanup():
                 try:
@@ -531,11 +518,6 @@ def save_and_close(parent, top, subject_var, body_text, persons, invoices_dir):
     _show_email_saving_ui(parent)
 
     _run_outlook_job_async(parent, persons, invoices_dir, subject, body)
-    # top.destroy()
-    # print(f'Before open outlook')
-    # open_outlook(persons, invoices_dir, subject_val, body_val)
-    # print(f'After open outlook')
-    # parent.on_emails_saved()
 
 
 def _cancel_email_editor(top, parent):

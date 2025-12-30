@@ -102,34 +102,6 @@ def ensure_outlook_ready(timeout=15):
         "Outlook ei ole valmis. Ava Outlook käsitsi, vali profiil (kui küsib) ja proovi uuesti."
     ) from last_err
 
-    # try:
-    #     subprocess.Popen(
-    #         [get_outlook_path()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    #     )
-    # except Exception as e:
-    #     print(f"Could not start Outlook. Please ensure it is installed. Error: {e}")
-    #     pass
-
-    # while time.time() - start < timeout:
-    #     try:
-    #         app = win32.gencache.EnsureDispatch("Outlook.Application")
-    #         session = app.GetNamespace("MAPI")
-    #         # profile, password, showDoalog, newSession
-    #         session.Logon(
-    #             "", "", True, True
-    #         )  # This will prompt for profile if not configured
-    #         _ = session.Accounts  # Accessing Accounts to ensure it's fully loaded
-    #         return app
-    #     except com_error:
-    #         time.sleep(2)
-    #     except Exception:
-    #         time.sleep(2)
-    # raise RuntimeError(
-    #     "Outlook did not become ready in time. "
-    #     "Open Outlook manually, finish the setup wizard"
-    #     "then rerun the script."
-    # )
-
 
 def apartments_from_persons(persons):
     return {str(p.apartment).strip() for p in persons if str(p.apartment).strip()}

@@ -86,9 +86,6 @@ def validate_email(email: str):
     return True
 
 
-
-
-
 def _validate_person_row(row, row_num: int):
     """ Validate a single row of person data from the XLS file. """
     email = get_field(row, "klient_mail")

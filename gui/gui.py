@@ -271,57 +271,6 @@ def _setup_send_drafts_button_handlers(root, parent):
     root.hide_send_drafts_button = hide_send_drafts_button
 
 
-# def _create_content_area(root, invoice_var, clients_var):
-#     """
-#     Create the main content area with file selection buttons and labels.
-#     Returns the created content frame.
-#     """
-#     content = tb.Frame(root)
-#     content.pack(expand=True)
-
-#     # Make one column centered
-#     content.grid_columnconfigure(0, weight=1)
-
-#     # Invoice
-#     root.btn_text_invoice = tk.StringVar(value="Vali arvete fail")
-#     root.btn_invoice = tb.Button(
-#         content,
-#         textvariable=root.btn_text_invoice,
-#         bootstyle=INFO,
-#         command=lambda: select_file(
-#             invoice_var,
-#             [("PDF files", "*.pdf")],
-#             root.btn_text_invoice,
-#             "Muuda arvete faili",
-#         ),
-#     )
-#     root.btn_invoice.grid(row=0, column=0, padx=12, pady=(6, 10), ipady=10)
-#     root.lbl_invoice = tb.Label(
-#         content, textvariable=invoice_var, wraplength=760, foreground="#9aa0a6"
-#     )
-#     root.lbl_invoice.grid(row=1, column=0, padx=12, pady=(0, 16))
-
-#     # Clients
-#     root.btn_text_clients = tk.StringVar(value="Vali klientide fail")
-#     root.btn_clients = tb.Button(
-#         content,
-#         textvariable=root.btn_text_clients,
-#         bootstyle=INFO,
-#         command=lambda: select_file(
-#             clients_var,
-#             [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
-#             root.btn_text_clients,
-#             "Muuda klientide faili",
-#         ),
-#     )
-#     root.btn_clients.grid(row=2, column=0, padx=12, pady=(0, 10), ipady=10)
-#     root.lbl_clients = tb.Label(
-#         content, textvariable=clients_var, wraplength=720, foreground="#9aa0a6"
-#     )
-#     root.lbl_clients.grid(row=3, column=0, padx=12, pady=(0, 6))
-#     return content
-
-
 def _create_section_header(parent, title: str):
     # Header row: title + separation line
     row = tb.Frame(parent)
@@ -503,12 +452,6 @@ def _setup_ui_components(
     # --- Send drafts button handlers ---
     _setup_send_drafts_button_handlers(root, bottom_bar)
 
-    # # Make big compose button do the same as bottom compose button
-    # root.btn_compose.configure(command=root.btn_compose.cget("command"))
-
-    # --- Content area ---
-    # content = _create_content_area(root, invoice_var, clients_var)
-
     # --- Apply initial disabled state until type chosen
     _apply_content_type_gate(root)
 
@@ -520,13 +463,6 @@ def main():
 
     if not _perform_startup_checks():
         return
-
-    # --- Set up default subject, body ---
-    # subject = "Arve"
-    # body = (
-    #     "Lugupeetud KÜ korteri omanik. Kü edastab järjekordse korteri "
-    #     "kuu kulude arve. See on automaatteavitus, palume mitte vastata."
-    # )
 
     # --- Start window setup ---
     root = tb.Window(themename="superhero")
@@ -553,7 +489,6 @@ def main():
         root, version, invoice_var, clients_var, root.content_type_var)
 
     center_window(root, min_w=800, min_h=650, max_w=980)
-    # root.update_idletasks()
     root.deiconify()
     root.lift()
     root.focus_force()
