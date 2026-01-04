@@ -16,14 +16,30 @@ from src.email_sender import (
     ensure_outlook_ready,
     validate_persons_vs_invoices,
 )
+from src.excel_invoice_extractor import export_excel_to_pdfs
 
 HUNDRED_PERCENT = 100
 REFIT_REGEX = r"(\d+)x(\d+)\+(\d+)\+(\d+)"
 
 
-def select_file(label, filetypes, btn_text_var, new_text):
+def _get_invoice_file_extension(key):
+    if key == "kommunaal":
+        return [("PDF files", "*.pdf")]
+    elif key == "kyte":
+        return [("Excel failid", "*.xls *.xlsx")]
+
+
+def select_file(root, label, btn_text_var, new_text, formats=None):
     """Open file dialog and set label and button text."""
-    path = filedialog.askopenfilename(title="Vali fail", filetypes=filetypes)
+    if formats:
+        invoice_formats = formats
+    else:
+        invoice_type = get_selected_invoice_type(root)
+        if invoice_type is None:
+            return
+        invoice_formats = _get_invoice_file_extension(invoice_type.key)
+
+    path = filedialog.askopenfilename(title="Vali fail", filetypes=invoice_formats)
     if path:
         label.set(path)
         btn_text_var.set(new_text)
@@ -129,14 +145,19 @@ def _create_dest_directory(invoice_path: str):
     return dest
 
 
-def _process_ocr(invoice_path: str, cancel_flag, on_progress):
+def _process_ocr(invoice_path: str, invoice_type: str, cancel_flag, on_progress):
     """Process the invoice PDF with OCR and return extracted invoices."""
     try:
-        invoices = separate_invoices(
-            invoice_path,
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-        )
+        print(f"Invoice path is: {invoice_path}")
+        if invoice_type == "kommunaal":
+            invoices = separate_invoices(
+                invoice_path,
+                on_progress=on_progress,
+                cancel_flag=cancel_flag,
+            )
+        elif invoice_type == "kyte":
+            dest_dir = export_excel_to_pdfs(invoice_path)
+            print(f'Excelist eksporditud PDF-id kausta: {dest_dir}')
     except pytesseract.TesseractError as e:
         log_exception(e)
         raise ValidationError(
@@ -145,9 +166,9 @@ def _process_ocr(invoice_path: str, cancel_flag, on_progress):
     return invoices
 
 
-def get_selected_invoice_type(root):
-    key = root.content_type_var.get()
-    return root.invoice_types.get(key)
+def get_selected_invoice_type(parent):
+    key = parent.content_type_var.get()
+    return parent.invoice_types.get(key)
 
 
 def _save_and_open_invoices(
@@ -240,7 +261,7 @@ def _handle_worker_error(parent, err):
         log_exception(err)
 
 
-def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag, fname):
+def _worker_extract_and_process(parent, invoice_type, invoice_path, clients_path, cancel_flag, fname):
     """Extract invoices and persons data."""
     # Extract people
     persons = extract_person(clients_path, parent.cancel_event)
@@ -253,7 +274,7 @@ def _worker_extract_and_process(parent, invoice_path, clients_path, cancel_flag,
         _on_progress_ui(parent, page_number, total_pages, fname)
 
     # Process ocr
-    invoices = _process_ocr(invoice_path, parent.cancel_event, on_progress)
+    invoices = _process_ocr(invoice_path, invoice_type, parent.cancel_event, on_progress)
 
     if parent.cancel_event.is_set():
         raise _Cancelled()
@@ -276,7 +297,7 @@ def _worker_finalize_invoices(parent, invoices, invoice_path):
     return dest, subject
 
 
-def worker(parent, invoice_path, clients_path, template_root, subject, body):
+def worker(parent, invoice_type, invoice_path, clients_path, template_root, subject, body):
     """Worker thread function to process invoices and open email editor."""
     try:
         # OCR read-through (emits per-page progress)
@@ -287,7 +308,7 @@ def worker(parent, invoice_path, clients_path, template_root, subject, body):
         parent.after(0, lambda: parent.page_progress.configure(value=0, mode="determinate"))
 
         persons, invoices = _worker_extract_and_process(
-            parent, invoice_path, clients_path, parent.cancel_event, fname
+            parent, invoice_type, invoice_path, clients_path, parent.cancel_event, fname
         )
 
         dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
@@ -322,14 +343,15 @@ def get_data_ready(
     content_type_var,
 ):
     """Validate inputs and start processing thread."""
-    type_key = content_type_var.get()
-    invoice_type = parent.invoice_types.get(type_key)
+    invoice_type = get_selected_invoice_type(parent)
 
     if invoice_type is None:
         return  # Shouldn't happen because UI disabled buttons
 
     subject = invoice_type.subject
     body = invoice_type.body
+
+    # Make a difference here based on the invoice type
 
     try:
         invoice_path, clients_path = validate_and_prepare_ui(
@@ -343,7 +365,7 @@ def get_data_ready(
     parent.after(
         10,
         lambda: start_processing_thread(
-            worker, parent, invoice_path, clients_path, template_root, subject, body
+            worker, parent, invoice_type.key, invoice_path, clients_path, template_root, subject, body
         ),
     )
 

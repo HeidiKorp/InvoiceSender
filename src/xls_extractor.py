@@ -124,3 +124,10 @@ def extract_person_data(input_file):
     if not persons:
         raise ValidationError("Klientide fail ei sisalda ühtegi kehtivat kirjet.")
     return persons
+
+
+def separate_kyte_invoices(invoice_path: str, on_progress):
+    # Will return invoices, do not save them here, only process
+
+    
+    pass

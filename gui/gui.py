@@ -20,6 +20,7 @@ from utils.gui_helpers import (
     center_window,
     cancel_current_job,
     get_data_ready,
+    get_selected_invoice_type
 )
 
 
@@ -286,13 +287,14 @@ def _create_section_header(parent, title: str):
 def _create_file_buttons(root, parent, invoice_var, clients_var):
     # Invoice row
     root.btn_text_invoice = tk.StringVar(value="Vali arvete fail")
+
     root.btn_invoice = tb.Button(
         parent,
         textvariable=root.btn_text_invoice,
         bootstyle=INFO,
         command=lambda: select_file(
+            root,
             invoice_var,
-            [("PDF files", "*.pdf")],
             root.btn_text_invoice,
             "Muuda arvete faili",
         ),
@@ -319,10 +321,11 @@ def _create_file_buttons(root, parent, invoice_var, clients_var):
         textvariable=root.btn_text_clients,
         bootstyle=INFO,
         command=lambda: select_file(
+            root,
             clients_var,
-            [("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
             root.btn_text_clients,
             "Muuda klientide faili",
+            formats=[("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
         ),
     )
     root.btn_clients.grid(
