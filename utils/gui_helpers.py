@@ -9,14 +9,23 @@ import traceback
 import pythoncom
 
 from utils.logging_helper import log_exception
+from utils.excel_app_helpers import excel_open_workbook
+from utils.file_utils import create_invoice_dir
 from src.pdf_extractor import separate_invoices, save_each_invoice_as_file
-from src.xls_extractor import extract_person_data, ValidationError
+from src.xls_extractor import extract_person_data
+from src.data_classes import InvoiceItem, InvoiceBatch, ValidationError, create_invoice_batch
 from src.email_sender import (
     save_emails_with_invoices,
     ensure_outlook_ready,
     validate_persons_vs_invoices,
 )
-from src.excel_invoice_extractor import export_excel_to_pdfs
+from src.excel_invoice_extractor import (
+    save_excel_invoices_as_pdfs,
+    read_invoice_meta_col_a,
+    create_excel_invoices,
+    get_korter_sheet_names,
+    extract_apartment,
+)
 
 HUNDRED_PERCENT = 100
 REFIT_REGEX = r"(\d+)x(\d+)\+(\d+)\+(\d+)"
@@ -90,9 +99,10 @@ def refit_window(win, min_w=800, min_h=600, max_w=900, max_h=None, margin=40):
     win.geometry(f"{width}x{height}+{x}+{y}")
 
 
-def _on_progress_ui(parent, page_number, total_pages, fname):
+def on_task_progress_ui(parent, page_number, total_pages, message):
     """Update progress bar and status label in the GUI thread."""
     pct = int(page_number / total_pages * HUNDRED_PERCENT) if total_pages else 0
+    print(f"Progress: {pct}% - {message}")
 
     def apply():
         # Ensure status bar is visible (in case it wasn't packed)
@@ -102,7 +112,7 @@ def _on_progress_ui(parent, page_number, total_pages, fname):
             pass
 
         parent.page_progress.configure(value=pct, mode="determinate")
-        parent.status_label.configure(text=f"PDF leht {page_number}/{total_pages} - {fname}")
+        parent.status_label.configure(text=message)
         parent.update_idletasks()
 
     parent.after(0, apply)
@@ -145,19 +155,78 @@ def _create_dest_directory(invoice_path: str):
     return dest
 
 
-def _process_ocr(invoice_path: str, invoice_type: str, cancel_flag, on_progress):
+def _extract_invoices_from_excel(invoice_path: str, cancel_flag, on_progress):
+    """Process the invoice Excel file and return extracted invoices."""
+    # Get all sheets with "Korter" in a list
+
+    def extract_all(_excel, workbook):
+        sheet_names = get_korter_sheet_names(workbook)
+        if not sheet_names:
+            raise ValidationError("Excelis pole lehti nimega 'Korter ...'")
+        
+        total = len(sheet_names)
+        if on_progress:
+            on_progress(0, total)
+
+        first_sheet = workbook.Sheets(sheet_names[0])
+        meta = read_invoice_meta_col_a(first_sheet)
+
+        invoices = []
+        for index, sheet_name in enumerate(sheet_names, start=1):
+            if cancel_flag.is_set():
+                log_exception(KeyboardInterrupt("Kasutaja katkestas töö"))
+                break
+
+            invoices.append(
+                InvoiceItem(
+                    apartment=extract_apartment(sheet_name),
+                    excel_sheet_name=sheet_name,
+                    address=meta.get("address"),
+                    period=meta.get("period"),
+                    year=meta.get("year"),
+                )
+            )
+            if on_progress:
+                on_progress(
+                    index,
+                    total)
+        return invoices
+    return excel_open_workbook(invoice_path, extract_all)
+
+    # invoice_sheets = separate_sheets(invoice_path)
+    # print(
+    #     f"Leitud {len(invoice_sheets)} arve lehte Excelist. Tyyp: {type(invoice_sheets[0])}"
+    # )
+    # meta = read_invoice_meta_col_a(invoice_sheets[0])
+    # print(f"Loetud metaandmed: {meta}")
+    # return create_excel_invoices(invoice_sheets, meta)
+
+
+def _extract_invoices_from_pdf(invoice_path: str, cancel_flag, on_progress):
     """Process the invoice PDF with OCR and return extracted invoices."""
     try:
-        print(f"Invoice path is: {invoice_path}")
-        if invoice_type == "kommunaal":
-            invoices = separate_invoices(
-                invoice_path,
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-            )
-        elif invoice_type == "kyte":
-            dest_dir = export_excel_to_pdfs(invoice_path)
-            print(f'Excelist eksporditud PDF-id kausta: {dest_dir}')
+
+        invoices = separate_invoices(
+            invoice_path,
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+        )
+
+        # Get all sheets with "Korter" in a list
+        # Try to extract period and address data from one sheet - if it doesn't work,
+        # let the user know so that they can set the email template accordingly (is the period necessary?)
+        # If the address exists, split from , and save the first part in lowecase with _ and make a new dir
+        # If address does't exist, name the new dir the same name as invoice file, no spaces
+        # dest_dir = export_excel_to_pdfs(invoice_path, cancel_flag)
+        # print(f'Excelist eksporditud PDF-id kausta: {dest_dir}')
+
+        # # Get all sheets with "Korter" in a list
+        # invoice_sheets = separate_sheets(invoice_path)
+        # print(f'Leitud {len(invoice_sheets)} arve lehte Excelist. Tyyp: {type(invoice_sheets[0])}')
+        # meta = read_invoice_meta_col_a(invoice_sheets[0])
+        # print(f'Loetud metaandmed: {meta}')
+        # # invoices = create_excel_invoices(invoice_sheets, meta)
+        # return
     except pytesseract.TesseractError as e:
         log_exception(e)
         raise ValidationError(
@@ -171,16 +240,17 @@ def get_selected_invoice_type(parent):
     return parent.invoice_types.get(key)
 
 
-def _save_and_open_invoices(
-    parent, invoices, dest: Path, template_root, persons, subject, body
-):
-    """Save invoices to files and open email editor."""
-    # After OK -> open the email editor
-    invoices_dir = save_each_invoice_as_file(
-        invoices, dest
-    )  # returns the full folder path to all individual invoices
-    parent.on_folder_created(str(invoices_dir))
-    open_email_editor(template_root, persons, invoices_dir, subject, body)
+# def _save_and_open_invoices(
+#     parent, invoices, dest: Path, template_root, persons, subject, body
+# ):
+#     """Save invoices to files and open email editor."""
+#     # After OK -> open the email editor
+#     invoices_dir = batch.save_invoices(batch.invoices, dest)
+#     invoices_dir = save_each_invoice_as_file(
+#         invoices, dest
+#     )  # returns the full folder path to all individual invoices
+#     parent.on_folder_created(str(invoices_dir))
+#     open_email_editor(template_root, persons, invoices_dir, subject, body)
 
 
 def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
@@ -217,23 +287,47 @@ def extract_person(clients_path: str, cancel_flag):
     return persons
 
 
-def finalize_and_open(parent, invoices, dest, template_root, persons, subject, body):
+def save_invoices_by_type(invoice_batch: InvoiceBatch, on_progress=None) -> Path:
+    """Save invoices based on their type and return the directory path."""
+    if invoice_batch.invoice_type_key == "kommunaal":
+        return save_each_invoice_as_file(
+            invoice_batch.invoices, invoice_batch.dest_dir
+        )  # returns the full folder path to all individual invoices
+    elif invoice_batch.invoice_type_key == "kyte":
+        return save_excel_invoices_as_pdfs(invoice_batch, on_progress)
+    else:
+        raise ValidationError(f"Tundmatu arve tüüp: {invoice_batch.invoice_type_key}")
+
+
+def finalize_after_saved(parent, batch: InvoiceBatch, template_root):
     """Finalize the process and open the email editor."""
     try:
         parent.page_progress.configure(value=HUNDRED_PERCENT)
         parent.status_label.configure(text="Valmis")
 
+        parent.on_folder_created(str(batch.dest_dir))
+
         # This blocks until the user clicks OK
-        messagebox.showinfo("Info", f"Arved salvestatakse kausta: {dest}")
+        messagebox.showinfo("Info", f"Arved salvestatakse kausta: {batch.dest_dir}")
 
         if parent.cancel_event.is_set():
             parent.after(0, lambda: on_cancel_ui(parent))
             return
 
         # Save and open invoices
-        _save_and_open_invoices(
-            parent, invoices, dest, template_root, persons, subject, body
+        # invoices_dir = batch.save_invoices(batch.invoices, batch.dest_dir)
+        print(f"Invoices saved to: {batch.dest_dir}")
+
+        open_email_editor(
+            parent,
+            batch.persons,
+            batch.dest_dir,
+            batch.subject,
+            batch.body,
         )
+        # _save_and_open_invoices(
+        #     parent, batch.invoices, batch.dest_dir, template_root, persons, subject, body
+        # )
 
         # Hide status bar again
         parent.status_bar.pack_forget()
@@ -261,24 +355,55 @@ def _handle_worker_error(parent, err):
         log_exception(err)
 
 
-def _worker_extract_and_process(parent, invoice_type, invoice_path, clients_path, cancel_flag, fname):
+def _worker_extract_and_process(
+    parent, invoice_type_key, invoice_path, clients_path, cancel_flag, fname
+):
     """Extract invoices and persons data."""
     # Extract people
     persons = extract_person(clients_path, parent.cancel_event)
     if parent.cancel_event.is_set():
         raise _Cancelled()
 
-    def on_progress(page_number, total_pages):
-        if parent.cancel_event.is_set():
-            raise _Cancelled()
-        _on_progress_ui(parent, page_number, total_pages, fname)
+    if invoice_type_key == "kommunaal":
+
+        def on_progress(page_number, total_pages):
+            if parent.cancel_event.is_set():
+                raise _Cancelled()
+            on_task_progress_ui(
+                parent,
+                page_number,
+                total_pages,
+                f"Loen PDF lehti {page_number}/{total_pages} - {fname}",
+            )
+
+        invoices = _extract_invoices_from_pdf(
+            invoice_path, parent.cancel_event, on_progress
+        )
+        return persons, invoices
+
+    elif invoice_type_key == "kyte":
+
+        def on_progress(page_number, total_pages):
+            if parent.cancel_event.is_set():
+                raise _Cancelled()
+            on_task_progress_ui(
+                parent,
+                page_number,
+                total_pages,
+                f"Loen Exceli lehti {page_number}/{total_pages} - {fname}",
+            )
+
+        invoices = _extract_invoices_from_excel(invoice_path, cancel_flag, on_progress)
+        return persons, invoices
+    else:
+        raise ValidationError(f"Tundmatu arve tüüp: {invoice_type_key}")
 
     # Process ocr
-    invoices = _process_ocr(invoice_path, invoice_type, parent.cancel_event, on_progress)
+    # invoices = _process_ocr(invoice_path, invoice_type, parent.cancel_event, on_progress)
 
-    if parent.cancel_event.is_set():
-        raise _Cancelled()
-    return persons, invoices
+    # if parent.cancel_event.is_set():
+    #     raise _Cancelled()
+    # return persons, invoices
 
 
 def _worker_finalize_invoices(parent, invoices, invoice_path):
@@ -297,7 +422,9 @@ def _worker_finalize_invoices(parent, invoices, invoice_path):
     return dest, subject
 
 
-def worker(parent, invoice_type, invoice_path, clients_path, template_root, subject, body):
+def worker(
+    parent, invoice_type_key, invoice_path, clients_path, template_root, subject, body
+):
     """Worker thread function to process invoices and open email editor."""
     try:
         # OCR read-through (emits per-page progress)
@@ -305,28 +432,73 @@ def worker(parent, invoice_type, invoice_path, clients_path, template_root, subj
 
         parent.after(0, lambda: parent.status_bar.pack(fill=X, side=BOTTOM))
         parent.after(0, lambda: parent.status_label.configure(text="Alustan..."))
-        parent.after(0, lambda: parent.page_progress.configure(value=0, mode="determinate"))
-
-        persons, invoices = _worker_extract_and_process(
-            parent, invoice_type, invoice_path, clients_path, parent.cancel_event, fname
+        parent.after(
+            0, lambda: parent.page_progress.configure(value=0, mode="determinate")
         )
 
+        persons, invoices = _worker_extract_and_process(
+            parent,
+            invoice_type_key,
+            invoice_path,
+            clients_path,
+            parent.cancel_event,
+            fname,
+        )
+
+        print("Extracted invoices!")
+
+        if parent.cancel_event.is_set():
+            parent.after(0, lambda: on_cancel_ui(parent))
+            return
+
         dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
+
+        print("Finalized invoices!")
+        if parent.cancel_event.is_set():
+            parent.after(0, lambda: on_cancel_ui(parent))
+            return
+
+        def on_progress(page_number, total_pages, message):
+            if parent.cancel_event.is_set():
+                raise _Cancelled()
+            on_task_progress_ui(parent, page_number, total_pages, message)
+
+        invoice_dir = create_invoice_dir(dest, invoices[0])
+
+        invoice_batch = create_invoice_batch(
+            parent=parent,
+            persons=persons,
+            invoices=invoices,
+            invoice_path=invoice_path,
+            invoice_type_key=invoice_type_key,
+            dest_dir=invoice_dir,
+            subject=subject,
+            body=body,
+            cancel_event=parent.cancel_event,
+        )
+        print("Created invoice batch!")
+
+        save_invoices_by_type(invoice_batch, on_progress=on_progress)
+
+        print("Saved invoices!")
+        if parent.cancel_event.is_set():
+            parent.after(0, lambda: on_cancel_ui(parent))
+            return
 
         # 5) Finalize and open email editor
         parent.after(
             0,
-            lambda: finalize_and_open(
-                parent, invoices, dest, template_root, persons, subject, body
-            ),
+            lambda: finalize_after_saved(parent, invoice_batch, template_root),
         )
 
     except Exception as e:
         _handle_worker_error(parent, e)
     finally:
+
         def cleanup():
             parent.page_progress.configure(value=0, mode="determinate")
             parent.btn_cancel.configure(state=DISABLED)
+
         parent.after(0, cleanup)
 
 
@@ -365,7 +537,14 @@ def get_data_ready(
     parent.after(
         10,
         lambda: start_processing_thread(
-            worker, parent, invoice_type.key, invoice_path, clients_path, template_root, subject, body
+            worker,
+            parent,
+            invoice_type.key,
+            invoice_path,
+            clients_path,
+            template_root,
+            subject,
+            body,
         ),
     )
 
@@ -474,7 +653,7 @@ def _validate_email_inputs(top, subject_var, body_text):
         )
         log_exception("Meili sisu on puudu.")
         return
-    
+
     return subject, body
 
 
@@ -496,6 +675,7 @@ def _show_email_saving_ui(parent):
         except Exception:
             pass
         parent.update_idletasks()
+
     parent.after(0, ui)
 
 
@@ -506,23 +686,26 @@ def _run_outlook_job_async(parent, persons, invoices_dir, subject, body):
             open_outlook(persons, invoices_dir, subject, body)
 
             parent.after(0, parent.on_emails_saved)
-            parent.after(0, lambda: parent.status_label.configure(text="Mustandid loodud"))
+            parent.after(
+                0, lambda: parent.status_label.configure(text="Mustandid loodud")
+            )
 
         except Exception as e:
-            log_exception(f'Viga mustandite loomisel: {e}')
+            log_exception(f"Viga mustandite loomisel: {e}")
             traceback_str = traceback.format_exc()
             parent.after(
-                0,
-                lambda: messagebox.showerror("Viga", f"{e}]\n\n{traceback_str}")
+                0, lambda: messagebox.showerror("Viga", f"{e}]\n\n{traceback_str}")
             )
         finally:
             pythoncom.CoUninitialize()
+
             def cleanup():
                 try:
                     parent.page_progress.stop()
                     parent.page_progress.configure(mode="determinate", value=0)
                 except Exception:
                     pass
+
             parent.after(0, cleanup)
 
     threading.Thread(target=job, daemon=True).start()

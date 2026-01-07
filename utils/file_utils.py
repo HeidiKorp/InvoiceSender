@@ -4,13 +4,14 @@ import shutil, os, sys
 import configparser
 from dataclasses import dataclass
 
-@dataclass(frozen=True)
-class InvoiceType:
-    key: str
-    label: str
-    subject: str
-    body: str
+from src.data_classes import InvoiceItem, InvoiceType
 
+
+def create_invoice_dir(base_dir: Path, invoice: InvoiceItem) -> Path:
+    """Create a directory for an invoice."""
+    invoices_dir = base_dir / invoice.address.replace(" ", "_") / invoice.period
+    invoices_dir.mkdir(parents=True, exist_ok=True)
+    return invoices_dir
 
 def load_app_version(config):
     return config.get("app", "VERSION", fallback="1.0.0")

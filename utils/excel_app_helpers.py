@@ -7,15 +7,17 @@ def excel_open_workbook(path: str, fn):
     """
     Open Excel + workbook, run function fn(workbook), close workbook and Excel.
     """
+    absolute_path = os.path.abspath(path)
+
     pythoncom.CoInitialize()
-    excel = wb = None
+    excel_app_instance = workbook = None
     try:
-        excel = excel_app()
-        wb = excel.Workbooks.Open(os.path.abspath(path), ReadOnly=True)
-        fn(excel, wb)
+        excel_app_instance = excel_app()
+        workbook = excel_app_instance.Workbooks.Open(absolute_path, ReadOnly=True)
+        return fn(excel_app_instance, workbook)
     finally:
-        close_workbook(wb)
-        quit_excel(excel)
+        close_workbook(workbook)
+        quit_excel(excel_app_instance)
         pythoncom.CoUninitialize()
 
 

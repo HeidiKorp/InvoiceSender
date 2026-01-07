@@ -4,6 +4,7 @@ import re, unicodedata
 from email.utils import parseaddr
 
 from utils.file_utils import get_field
+from src.data_classes import Person, ValidationError
 
 LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
 DOMAIN_RE = re.compile(
@@ -12,18 +13,6 @@ DOMAIN_RE = re.compile(
 RE_NUM = re.compile(r"^\d+$")
 
 
-class ValidationError(ValueError):
-    pass
-
-
-class Person:
-    def __init__(self, apartment, address, email=None):
-        self.apartment = apartment
-        self.address = address
-        self.emails = split_emails(email)
-
-    def __repr__(self):
-        return f"Person(\nemails={self.emails}, \naddress={self.address}, \napartment={self.apartment}\n)"
 
 
 def read_xls_with_fallback(path):
@@ -120,7 +109,8 @@ def extract_person_data(input_file):
     persons = []
     for row_num, row in enumerate(df.itertuples(index=False, name="Row"), start=2):
         email, apt, address = _validate_person_row(row, row_num)
-        persons.append(Person(email=email, apartment=apt, address=address))
+        emails = split_emails(email)
+        persons.append(Person(emails=emails, apartment=apt, address=address))
     if not persons:
         raise ValidationError("Klientide fail ei sisalda ühtegi kehtivat kirjet.")
     return persons

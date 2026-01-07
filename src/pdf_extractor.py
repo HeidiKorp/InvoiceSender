@@ -7,7 +7,7 @@ from PIL import Image, ImageOps, ImageFilter
 import pytesseract
 import traceback
 
-from src.xls_extractor import ValidationError
+from src.data_classes import ValidationError
 from utils.logging_helper import log_line
 from utils.ocr_helper import (
     check_tesseract_lang,
@@ -15,6 +15,8 @@ from utils.ocr_helper import (
     preprocess_for_ocr,
     run_ocr_on_image,
 )
+from src.data_classes import InvoiceItem
+from utils.file_utils import create_invoice_dir
 
 
 logging.basicConfig(
@@ -37,25 +39,13 @@ def _validate_page_text(text: str, page_number: int, pdf_path: str):
 def _parse_invoice_page(page, text: str, page_number: int, pdf_path: str) -> dict:
     _validate_page_text(text, page_number, pdf_path)
     client_data = extract_address_period_apartment(text)
-    return Invoice(
-        page=page,
+    return InvoiceItem(
+        pdf_page=page,
         address=client_data["address"],
         period=client_data["period"],
         apartment=client_data["apartment"],
         year=client_data["year"],
     )
-
-
-class Invoice:
-    def __init__(self, page, address, period, apartment, year):
-        self.page = page
-        self.address = address
-        self.period = period
-        self.apartment = apartment
-        self.year = year
-
-    def __repr__(self):
-        return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
 
 
 def _ocr_single_page(page, page_idx, doc, pdf_path, lang, ocr_config, matrix, timeout_sec, on_progress, cancel_flag):
@@ -254,12 +244,11 @@ def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
 
 
 def save_each_invoice_as_file(invoices, dest):
-    invoices_dir = dest / invoices[0].address.replace(" ", "_") / invoices[0].period
-    invoices_dir.mkdir(parents=True, exist_ok=True)
+    invoices_dir = create_invoice_dir(dest, invoices[0])
 
     for invoice in invoices:
         writer = PdfWriter()
-        writer.add_page(invoice.page)
+        writer.add_page(invoice.pdf_page)
         with open(invoices_dir / f"{invoice.apartment}.pdf", "wb") as f:
             writer.write(f)
-    return invoices_dir
+    # return invoices_dir

@@ -3,12 +3,7 @@ import pythoncom
 import win32com.client as win32
 
 from utils.logging_helper import log_exception
-
-XL_FORMULAS = -4123
-XL_PART = 1
-XL_BY_ROWS = 1
-XL_BY_COLUMNS = 2
-XL_PREVIOUS = 2
+from utils.excel_constants import XL_FORMULAS, XL_PART, XL_BY_ROWS, XL_BY_COLUMNS, XL_PREVIOUS
 
 
 # --- Trailing empty space trimming ---
@@ -18,7 +13,7 @@ def set_printarea_to_last_content(sheet):
     if not row or not col:
         sheet.PageSetup.PrintArea = "$A$1:$A$1"
         return
-    sheet.PageSetup.PrintArea = f"$A$1:${_col_letter(col)}${row}"
+    sheet.PageSetup.PrintArea = f"$A$1:${col_letter(col)}${row}"
 
 
 def _last_content_row_col(sheet):
@@ -38,7 +33,7 @@ def _last_content_row_col(sheet):
         return None, None
 
 
-def _col_letter(col_idx: int) -> str:
+def col_letter(col_idx: int) -> str:
     """ Convert 1-based column index to letter(s), e.g. 1 -> A, 27 -> AA. """
     letters = ""
     while col_idx > 0:

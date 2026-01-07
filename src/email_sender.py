@@ -8,7 +8,7 @@ import winreg
 from collections import Counter
 
 from utils.logging_helper import log_exception
-from src.xls_extractor import ValidationError
+from src.data_classes import ValidationError
 
 OUTLOOK_MAIL_ITEM = 0
 OUTLOOK_FOLDER_DRAFTS = 16
