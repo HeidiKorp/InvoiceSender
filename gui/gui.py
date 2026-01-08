@@ -13,14 +13,20 @@ from utils.logging_helper import (
     delete_old_error_log,
     _thread_excepthook,
 )
-from utils.file_utils import delete_folder, read_config, load_invoice_types, load_app_version, load_app_name
+from utils.file_utils import (
+    delete_folder,
+    read_config,
+    load_invoice_types,
+    load_app_version,
+    load_app_name,
+)
 from utils.ocr_helper import get_tesseract_cmd, check_ocr_environment
 from utils.gui_helpers import (
     select_file,
     center_window,
     cancel_current_job,
     get_data_ready,
-    get_selected_invoice_type
+    get_selected_invoice_type,
 )
 
 
@@ -127,7 +133,7 @@ def _create_status_bar(root):
     status_bar = tb.Frame(root)
     status_bar.pack(fill=X, side=BOTTOM)
 
-    root.status_label = tb.Label(status_bar, text="Valmis", bootstyle=INFO)
+    root.status_label = tb.Label(status_bar, text="Valmis", bootstyle=INFO, anchor="w")
     root.status_label.pack(side=LEFT, padx=10, pady=8)
 
     root.page_progress = tb.Progressbar(
@@ -135,6 +141,21 @@ def _create_status_bar(root):
     )
 
     root.page_progress.pack(side=LEFT, fill=X, expand=True, padx=(10, 12), pady=8)
+
+    def enforce_layout(_event=None):
+        window_width = root.winfo_width()
+        if window_width <= 1:
+            return
+        
+        min_width = int(window_width * 0.5)
+        root.page_progress.configure(length=min_width)
+
+        root.status_label.configure(wraplength=int(root.winfo_width() * 0.45))
+
+    root.bind("<Configure>", enforce_layout)
+
+    # Set once after initial layout
+    root.after(0, enforce_layout)
 
     # Hide status bar initially
     status_bar.pack_forget()
@@ -325,7 +346,7 @@ def _create_file_buttons(root, parent, invoice_var, clients_var):
             clients_var,
             root.btn_text_clients,
             "Muuda klientide faili",
-            formats=[("XLS files", "*.xls"), ("XLSX files", "*.xlsx")],
+            formats=[("Excel failid", "*.xls *.xlsx")],
         ),
     )
     root.btn_clients.grid(
@@ -424,9 +445,7 @@ def _create_mail_section(root, parent, invoice_var, clients_var):
     ).pack(anchor=W, pady=(10, 0))
 
 
-def _setup_ui_components(
-    root, version, invoice_var, clients_var, content_type_var
-):
+def _setup_ui_components(root, version, invoice_var, clients_var, content_type_var):
     """Set up all UI components."""
     # --- Version label (top right) ---
     _create_version_label(root, version)
@@ -488,8 +507,7 @@ def main():
     root.content_type_var = tb.StringVar(value="")  # "", "kommunaal", "kyte"
 
     # --- Create UI components ---
-    _setup_ui_components(
-        root, version, invoice_var, clients_var, root.content_type_var)
+    _setup_ui_components(root, version, invoice_var, clients_var, root.content_type_var)
 
     center_window(root, min_w=800, min_h=650, max_w=980)
     root.deiconify()

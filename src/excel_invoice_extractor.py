@@ -5,11 +5,11 @@ from datetime import datetime
 from pathlib import Path
 
 from utils.logging_helper import log_exception
-from utils.excel_app_helpers import excel_open_workbook
+from utils.excel_app_helpers import excel_open_workbook, close_workbook, quit_excel
 from utils.excel_sheet_helpers import set_printarea_to_last_content, make_output_dir, safe_filename, col_letter
 from utils.excel_constants import (XL_FORMULAS, XL_PART, XL_BY_ROWS, XL_BY_COLUMNS, XL_PREVIOUS, XL_NEXT, XL_VALUES,
                                    PDF_TYPE, PDF_QUALITY_STANDARD)
-from src.data_classes import InvoiceItem
+from src.data_classes import InvoiceItem, Cancelled
 from utils.file_utils import create_invoice_dir
 
 ESTONIAN_MONTHS = {
@@ -18,12 +18,10 @@ ESTONIAN_MONTHS = {
     9: "september", 10: "oktoober", 11: "november", 12: "detsember",
 }
 
-def save_excel_invoices_as_pdfs(invoice_batch: "InvoiceBatch", on_progress=None) -> Path:
+def save_excel_invoices_as_pdfs(invoice_batch: "InvoiceBatch", on_progress=None, cancel_event=None) -> Path:
     parent = invoice_batch.parent
     cancel_event = invoice_batch.cancel_event
     invoices = invoice_batch.invoices
-
-    # invoice_dir = create_invoice_dir(invoice_batch.dest_dir, invoices[0])
 
     total = len(invoices)
     fname = os.path.basename(invoice_batch.invoice_path)
@@ -34,11 +32,20 @@ def save_excel_invoices_as_pdfs(invoice_batch: "InvoiceBatch", on_progress=None)
     def export_all(_excel, workbook):
         for index, invoice in enumerate(invoices, start=1):
             if cancel_event.is_set():
-                log_exception(KeyboardInterrupt("Kasutaja katkestas töö"))
-                break
+                close_workbook(workbook)
+                quit_excel(_excel)
+                raise Cancelled
 
             sheet_name = invoice.excel_sheet_name
             worksheet = workbook.Sheets(sheet_name)
+
+            set_printarea_to_last_content(worksheet)
+
+            remove_forbidden_trailing_rows(
+                worksheet,
+                forbidden_labels=["Radiaator 13", "Radiaator 14"],
+                column_index=1,
+            )
 
             set_printarea_to_last_content(worksheet)
 
@@ -54,9 +61,7 @@ def save_excel_invoices_as_pdfs(invoice_batch: "InvoiceBatch", on_progress=None)
             )
             on_progress(index, total, f"Salvestan Exceli lehti {index}/{total} - {fname}")
 
-            
-        # return invoice_dir
-    return excel_open_workbook(invoice_batch.invoice_path, export_all)
+    return excel_open_workbook(invoice_batch.invoice_path, export_all, cancel_event=cancel_event)
 
 
 def create_excel_invoices(sheets: list, meta: dict) -> list[InvoiceItem]:
@@ -146,6 +151,29 @@ def _find_right_cell_value(sheet, label: str, max_rows=50) -> str:
     return ""
 
 
+def remove_forbidden_trailing_rows(worksheet, forbidden_labels: list[str], column_index: int = 1):
+    forbidden_norm = {normalize_label(label) for label in forbidden_labels}
+
+    last_row = get_last_used_row(worksheet)
+    while last_row >= 1:
+        cell_text = get_cell_text(worksheet.Cells(last_row, column_index))
+        normalized = normalize_label(cell_text)
+
+        if normalized in forbidden_norm:
+            print(f"Removing row {last_row} because it contains a forbidden label.")
+            worksheet.Rows(last_row).Delete()
+            last_row -= 1
+            continue
+        break # No more forbidden rows at the end
+
+
+def get_last_used_row(worksheet) -> int:
+    used_range = worksheet.UsedRange
+    start_row = used_range.Row
+    row_count = used_range.Rows.Count
+    return int(start_row + row_count - 1)
+
+
 def get_cell_text(cell) -> str:
     """ Safely get cell text, handling merged cells. """
     try:
@@ -167,6 +195,7 @@ def get_cell_text(cell) -> str:
 def normalize_label(label: str) -> str:
     """ Normalize label for comparison: lowercase, strip whitespace and trailing colon. """
     norm = "" if label is None else str(label).strip().lower()
+    norm = norm.replace("\xa0", " ") # non-breaking space
     norm = norm[:1].strip() if norm.endswith(":") else norm
     return " ".join(norm.split())
 

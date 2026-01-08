@@ -70,34 +70,15 @@ def create_invoice_batch(
     )
 
 
-
-# class Invoice:
-#     def __init__(self, page, address, period, apartment, year):
-#         self.page = page
-#         self.address = address
-#         self.period = period
-#         self.apartment = apartment
-#         self.year = year
-
-#     def __repr__(self):
-#         return f"Invoice(address={self.address}, period={self.period}, apartment={self.apartment})"
-
-
-# class ExcelInvoice(Invoice):
-#     def __init__(self, page, address, period, apartment, year):
-#         self.page = page
-#         self.address = address
-#         self.period = period
-#         self.apartment = apartment
-#         self.year = year
-
-#     def __repr__(self):
-#         return f"ExcelInvoice(address={self.address}, period={self.period}, apartment={self.apartment})"
-
-
 @dataclass(frozen=True)
 class InvoiceType:
     key: str
     label: str
     subject: str
     body: str
+
+
+
+class Cancelled(Exception):
+    # "Operation cancelled by user."
+    pass

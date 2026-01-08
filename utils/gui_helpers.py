@@ -13,7 +13,7 @@ from utils.excel_app_helpers import excel_open_workbook
 from utils.file_utils import create_invoice_dir
 from src.pdf_extractor import separate_invoices, save_each_invoice_as_file
 from src.xls_extractor import extract_person_data
-from src.data_classes import InvoiceItem, InvoiceBatch, ValidationError, create_invoice_batch
+from src.data_classes import InvoiceItem, InvoiceBatch, ValidationError, create_invoice_batch, Cancelled
 from src.email_sender import (
     save_emails_with_invoices,
     ensure_outlook_ready,
@@ -174,8 +174,7 @@ def _extract_invoices_from_excel(invoice_path: str, cancel_flag, on_progress):
         invoices = []
         for index, sheet_name in enumerate(sheet_names, start=1):
             if cancel_flag.is_set():
-                log_exception(KeyboardInterrupt("Kasutaja katkestas töö"))
-                break
+                raise Cancelled
 
             invoices.append(
                 InvoiceItem(
@@ -191,15 +190,7 @@ def _extract_invoices_from_excel(invoice_path: str, cancel_flag, on_progress):
                     index,
                     total)
         return invoices
-    return excel_open_workbook(invoice_path, extract_all)
-
-    # invoice_sheets = separate_sheets(invoice_path)
-    # print(
-    #     f"Leitud {len(invoice_sheets)} arve lehte Excelist. Tyyp: {type(invoice_sheets[0])}"
-    # )
-    # meta = read_invoice_meta_col_a(invoice_sheets[0])
-    # print(f"Loetud metaandmed: {meta}")
-    # return create_excel_invoices(invoice_sheets, meta)
+    return excel_open_workbook(invoice_path, extract_all, cancel_event=cancel_flag)
 
 
 def _extract_invoices_from_pdf(invoice_path: str, cancel_flag, on_progress):
@@ -212,21 +203,6 @@ def _extract_invoices_from_pdf(invoice_path: str, cancel_flag, on_progress):
             cancel_flag=cancel_flag,
         )
 
-        # Get all sheets with "Korter" in a list
-        # Try to extract period and address data from one sheet - if it doesn't work,
-        # let the user know so that they can set the email template accordingly (is the period necessary?)
-        # If the address exists, split from , and save the first part in lowecase with _ and make a new dir
-        # If address does't exist, name the new dir the same name as invoice file, no spaces
-        # dest_dir = export_excel_to_pdfs(invoice_path, cancel_flag)
-        # print(f'Excelist eksporditud PDF-id kausta: {dest_dir}')
-
-        # # Get all sheets with "Korter" in a list
-        # invoice_sheets = separate_sheets(invoice_path)
-        # print(f'Leitud {len(invoice_sheets)} arve lehte Excelist. Tyyp: {type(invoice_sheets[0])}')
-        # meta = read_invoice_meta_col_a(invoice_sheets[0])
-        # print(f'Loetud metaandmed: {meta}')
-        # # invoices = create_excel_invoices(invoice_sheets, meta)
-        # return
     except pytesseract.TesseractError as e:
         log_exception(e)
         raise ValidationError(
@@ -238,20 +214,6 @@ def _extract_invoices_from_pdf(invoice_path: str, cancel_flag, on_progress):
 def get_selected_invoice_type(parent):
     key = parent.content_type_var.get()
     return parent.invoice_types.get(key)
-
-
-# def _save_and_open_invoices(
-#     parent, invoices, dest: Path, template_root, persons, subject, body
-# ):
-#     """Save invoices to files and open email editor."""
-#     # After OK -> open the email editor
-#     invoices_dir = batch.save_invoices(batch.invoices, dest)
-#     invoices_dir = save_each_invoice_as_file(
-#         invoices, dest
-#     )  # returns the full folder path to all individual invoices
-#     parent.on_folder_created(str(invoices_dir))
-#     open_email_editor(template_root, persons, invoices_dir, subject, body)
-
 
 def validate_and_prepare_ui(parent, invoice_var: str, clients_var: str):
     """Validate input files and prepare the UI for processing."""
@@ -283,18 +245,18 @@ def extract_person(clients_path: str, cancel_flag):
     """Extract person data from the clients file."""
     persons = extract_person_data(clients_path)  # raise ValidationError on error
     if cancel_flag.is_set():
-        raise _Cancelled()
+        raise Cancelled()
     return persons
 
 
-def save_invoices_by_type(invoice_batch: InvoiceBatch, on_progress=None) -> Path:
+def save_invoices_by_type(invoice_batch: InvoiceBatch, on_progress=None, cancel_flag=None) -> Path:
     """Save invoices based on their type and return the directory path."""
     if invoice_batch.invoice_type_key == "kommunaal":
         return save_each_invoice_as_file(
             invoice_batch.invoices, invoice_batch.dest_dir
         )  # returns the full folder path to all individual invoices
     elif invoice_batch.invoice_type_key == "kyte":
-        return save_excel_invoices_as_pdfs(invoice_batch, on_progress)
+        return save_excel_invoices_as_pdfs(invoice_batch, on_progress, cancel_event=cancel_flag)
     else:
         raise ValidationError(f"Tundmatu arve tüüp: {invoice_batch.invoice_type_key}")
 
@@ -325,9 +287,6 @@ def finalize_after_saved(parent, batch: InvoiceBatch, template_root):
             batch.subject,
             batch.body,
         )
-        # _save_and_open_invoices(
-        #     parent, batch.invoices, batch.dest_dir, template_root, persons, subject, body
-        # )
 
         # Hide status bar again
         parent.status_bar.pack_forget()
@@ -341,9 +300,9 @@ def finalize_after_saved(parent, batch: InvoiceBatch, template_root):
 
 def _handle_worker_error(parent, err):
     """Handle errors from the worker thread in the GUI thread."""
-    if isinstance(err, _Cancelled):
+    if isinstance(err, Cancelled):
         parent.after(0, lambda: on_cancel_ui(parent))
-        log_exception(_Cancelled("Operation cancelled by user."))
+        log_exception(Cancelled("Operation cancelled by user."))
     elif isinstance(err, ValidationError):
         parent.after(0, lambda err=err: messagebox.showerror("Viga", str(err)))
         log_exception(err)
@@ -362,13 +321,13 @@ def _worker_extract_and_process(
     # Extract people
     persons = extract_person(clients_path, parent.cancel_event)
     if parent.cancel_event.is_set():
-        raise _Cancelled()
+        raise Cancelled()
 
     if invoice_type_key == "kommunaal":
 
         def on_progress(page_number, total_pages):
             if parent.cancel_event.is_set():
-                raise _Cancelled()
+                raise Cancelled()
             on_task_progress_ui(
                 parent,
                 page_number,
@@ -385,7 +344,7 @@ def _worker_extract_and_process(
 
         def on_progress(page_number, total_pages):
             if parent.cancel_event.is_set():
-                raise _Cancelled()
+                raise Cancelled()
             on_task_progress_ui(
                 parent,
                 page_number,
@@ -398,13 +357,6 @@ def _worker_extract_and_process(
     else:
         raise ValidationError(f"Tundmatu arve tüüp: {invoice_type_key}")
 
-    # Process ocr
-    # invoices = _process_ocr(invoice_path, invoice_type, parent.cancel_event, on_progress)
-
-    # if parent.cancel_event.is_set():
-    #     raise _Cancelled()
-    # return persons, invoices
-
 
 def _worker_finalize_invoices(parent, invoices, invoice_path):
     """Finalize invoices and create destination folder."""
@@ -415,7 +367,7 @@ def _worker_finalize_invoices(parent, invoices, invoice_path):
     dest = _create_dest_directory(invoice_path)
 
     if parent.cancel_event.is_set():
-        raise _Cancelled()
+        raise Cancelled()
 
     example_invoice = invoices[0]
     subject = f"Arve {example_invoice.period} {example_invoice.year}"
@@ -445,22 +397,19 @@ def worker(
             fname,
         )
 
-        print("Extracted invoices!")
-
         if parent.cancel_event.is_set():
             parent.after(0, lambda: on_cancel_ui(parent))
             return
 
         dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
 
-        print("Finalized invoices!")
         if parent.cancel_event.is_set():
             parent.after(0, lambda: on_cancel_ui(parent))
             return
 
         def on_progress(page_number, total_pages, message):
             if parent.cancel_event.is_set():
-                raise _Cancelled()
+                raise Cancelled()
             on_task_progress_ui(parent, page_number, total_pages, message)
 
         invoice_dir = create_invoice_dir(dest, invoices[0])
@@ -476,11 +425,9 @@ def worker(
             body=body,
             cancel_event=parent.cancel_event,
         )
-        print("Created invoice batch!")
 
-        save_invoices_by_type(invoice_batch, on_progress=on_progress)
+        save_invoices_by_type(invoice_batch, on_progress=on_progress, cancel_flag=parent.cancel_event)
 
-        print("Saved invoices!")
         if parent.cancel_event.is_set():
             parent.after(0, lambda: on_cancel_ui(parent))
             return
@@ -522,8 +469,6 @@ def get_data_ready(
 
     subject = invoice_type.subject
     body = invoice_type.body
-
-    # Make a difference here based on the invoice type
 
     try:
         invoice_path, clients_path = validate_and_prepare_ui(
@@ -815,11 +760,6 @@ def open_email_editor(parent, persons, invoices_dir, subject, body):
     subject_entry.selection_range(0, END)
 
     center_window(top, min_w=760, min_h=520, max_w=960)
-
-
-class _Cancelled(Exception):
-    # "Operation cancelled by user."
-    pass
 
 
 def cancel_current_job(root):

@@ -251,4 +251,4 @@ def save_each_invoice_as_file(invoices, dest):
         writer.add_page(invoice.pdf_page)
         with open(invoices_dir / f"{invoice.apartment}.pdf", "wb") as f:
             writer.write(f)
-    # return invoices_dir
+    return invoices_dir
