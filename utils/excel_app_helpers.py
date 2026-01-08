@@ -5,11 +5,12 @@ import ctypes
 from ctypes import wintypes
 import subprocess
 import gc
+import threading
 
 from src.data_classes import Cancelled
 
 
-def excel_open_workbook(path: str, fn, cancel_event=None):
+def excel_open_workbook(path: str, fn, cancel_event=None, shutdown_timeout=5.0):
     """
     Open Excel + workbook, run function fn(workbook), close workbook and Excel.
     """
@@ -18,6 +19,7 @@ def excel_open_workbook(path: str, fn, cancel_event=None):
     pythoncom.CoInitialize()
     excel_app_instance = workbook = None
     excel_pid = None
+    watchdog = None
     try:
         excel_app_instance = excel_app()
         excel_pid = get_excel_pid(excel_app_instance)
@@ -25,10 +27,6 @@ def excel_open_workbook(path: str, fn, cancel_event=None):
         try:
             excel_app_instance.DisplayAlerts = False
             excel_app_instance.AskToUpdateLinks = False
-        except Exception:
-            pass
-
-        try:
             excel_app_instance.AutomationSecurity = 3 # disable macros
         except Exception:
             pass
@@ -49,15 +47,26 @@ def excel_open_workbook(path: str, fn, cancel_event=None):
         
         if cancelled and excel_pid:
             kill_process(excel_pid)
+        
+        if excel_pid:
+            watchdog = threading.Timer(shutdown_timeout, lambda: kill_process(excel_pid))
+            watchdog.daemon = True
+            watchdog.start()
 
-        close_workbook(workbook)
-        quit_excel(excel_app_instance)
+        try:
+            close_workbook(workbook)
+            quit_excel(excel_app_instance)
+        finally:
+            if watchdog is not None:
+                try:
+                    watchdog.cancel()
+                except Exception:
+                    pass
 
-
-        workbook = None
-        excel_app_instance = None
-        gc.collect()
-        pythoncom.CoUninitialize()
+            workbook = None
+            excel_app_instance = None
+            gc.collect()
+            pythoncom.CoUninitialize()
 
 
 def excel_app():
