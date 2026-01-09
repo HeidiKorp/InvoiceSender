@@ -39,9 +39,24 @@ def load_invoice_types(config):
     return types, hint
 
 
-def read_config():
+def get_config_path() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+        return Path(os.path.join(base_dir, "_internal", "config.cfg"))
+    else:
+        return Path(__file__).parent.parent / "config.cfg"
+
+
+def read_config(filename: str = "config.cfg"):
     config = configparser.ConfigParser()
-    config_path = Path(__file__).parent.parent / "config.cfg"
+    config_path = get_config_path()
+
+    # bundled = _bundled_dir()
+    # if bundled:
+    #     canc
+
+    # config_path = resource_path("config.cfg")
+    # config_path = Path(__file__).parent.parent / "config.cfg"
 
     try:
         with config_path.open("r", encoding="utf-8") as f:

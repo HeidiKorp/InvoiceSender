@@ -244,11 +244,9 @@ def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
 
 
 def save_each_invoice_as_file(invoices, dest):
-    invoices_dir = create_invoice_dir(dest, invoices[0])
-
     for invoice in invoices:
         writer = PdfWriter()
         writer.add_page(invoice.pdf_page)
-        with open(invoices_dir / f"{invoice.apartment}.pdf", "wb") as f:
+        with open(dest / f"{invoice.apartment}.pdf", "wb") as f:
             writer.write(f)
-    return invoices_dir
+    return dest
