@@ -134,14 +134,14 @@ def _check_duplicate_invoices(invoice_counts):
 def _build_validation_errors(missing, extra, duplicates):
     problems = []
     if missing:
-        problems.append(f"Puuduvad arved korteritele: {', '.join(missing)}.")
+        problems.append(f"Puuduvad arved korteritele: {', '.join(missing)}.\n")
     if extra:
         problems.append(
-            f"Arved, millele ei leitud klienti: {', '.join(extra)}."
+            f"Arved, millele ei leitud klienti: {', '.join(extra)}.\n"
         )
     if duplicates:
         problems.append(
-            f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}."
+            f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.\n"
         )
     return problems
 
@@ -194,13 +194,13 @@ def save_emails_with_invoices(persons, invoices_dir, subject, body):
     outlook = win32.Dispatch("outlook.application")
     ns = outlook.Session
     
+    not_found_invoices = []
     for person in persons:
         invoice_path = get_person_invoice(person.apartment, invoices_dir)
-        if not invoice_path:
-            # Should not happen now, but guard anyway
-            raise ValidationError(f"Arvet ei leitud korterile: {person.apartment}")
-        for email in person.emails:
-            _create_email_draft(outlook, invoice_path, email, subject, body)
+
+        if invoice_path:
+            for email in person.emails:
+                _create_email_draft(outlook, invoice_path, email, subject, body)
 
     # Open drafts folder in Outlook after creating all drafts
     drafts_folder = ns.GetDefaultFolder(OUTLOOK_FOLDER_DRAFTS)
