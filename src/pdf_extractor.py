@@ -6,6 +6,7 @@ import io, gc, fitz, logging, sys, os
 from PIL import Image, ImageOps, ImageFilter
 import pytesseract
 import traceback
+import json
 
 from src.data_classes import ValidationError
 from utils.logging_helper import log_line
@@ -17,6 +18,13 @@ from utils.ocr_helper import (
 )
 from src.data_classes import InvoiceItem
 from utils.file_utils import create_invoice_dir
+
+BLOCK_NEXTLINE_RE = re.compile(r"\b(reg\.?\s*kood|raamatupidamine|arveldus|iban|tel|e-?post)\b", re.IGNORECASE)
+STREET_TOKEN_PATTERN = r"(tee|tn|tänav|pst|puiestee|mnt|küla|maantee)"
+HOUSE_APT_RE = re.compile(
+    rf"\b(?P<street>[A-Za-zÕÄÖÜõäöüšž\.\- ]+)\s+(?P<house>\d{{1,4}}[A-Za-z]?)\s*-\s*(?P<apartment>\d{{1,4}})\b",
+    re.IGNORECASE
+)
 
 
 logging.basicConfig(
@@ -36,9 +44,33 @@ def _validate_page_text(text: str, page_number: int, pdf_path: str):
         )
 
 
-def _parse_invoice_page(page, text: str, page_number: int, pdf_path: str) -> dict:
+def save_debug_data(entry):
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+
+    debug_file = os.path.join(base, "debug.log")
+    # print(f"Debug file is at: {debug_file}")
+
+    with open(debug_file, "a", encoding="utf-8") as f:
+        if isinstance(entry, dict):
+            f.write(json.dumps(entry, ensure_ascii=False, indent=2))
+        else:
+            f.write(str(entry))
+        f.write("\n\n---\n\n")
+
+
+def _parse_invoice_page(page, text: str, page_number: int, pdf_path: str, prev_apt) -> dict:
+    # Debug part
+    # debug_nr = [5, 52, 60, 61]
+
     _validate_page_text(text, page_number, pdf_path)
-    client_data = extract_address_period_apartment(text)
+    client_data = extract_address_period_apartment(text, prev_apt)
+    # if page_number in debug_nr:
+    #     save_debug_data(text)
+    #     save_debug_data(client_data)
+        
     return InvoiceItem(
         pdf_page=page,
         address=client_data["address"],
@@ -104,10 +136,13 @@ def ocr_pdf_all_pages(
 
     ocr_config = f"--oem {oem} --psm {psm}"
 
+    # test_invoices = [39, 40, 41]
+
     with fitz.open(pdf_path) as doc:
         total_pages = doc.page_count
 
         for i, page in enumerate(doc, start=1):
+            # if i in test_invoices:
             text = _ocr_single_page(
                 page,
                 i,
@@ -122,10 +157,12 @@ def ocr_pdf_all_pages(
             )
             if text is not None:
                 texts.append(text)
+
             elif cancel_flag and cancel_flag.is_set():
                 logging.info("OCR process cancelled by user.")
                 break
-
+            else:
+                print("Text is none! idx={i}")
         gc.collect()
     return texts
 
@@ -151,67 +188,146 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
             f"PDF faili '{pdf_path}' OCR-tulemus on ebajärjekindel (lehtede arv ei klapi)."
         )
 
-    invoices = []
+    invoices: list[InvoiceItem] = []
+    prev_apt: int | None = None
+
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        invoices.append(_parse_invoice_page(page, text, idx, pdf_path))
+        invoice = _parse_invoice_page(page, text, idx, pdf_path, prev_apt)
+        invoices.append(invoice)
+
+        try:
+            prev_apt = int(invoice.apartment) if invoice.apartment else prev_apt
+        except ValueError:
+            pass
     return invoices
 
 
-def build_address_block(rows: list[str]) -> str:
+def _norm_row(row: str) -> str:
+    row = row.replace("\u2014", "-").replace("\u2013", "-") # em/en dash -> hypen
+    row = row.replace("\xa0", " ")
+    row = re.sub(r"\s+", " ", row)
+    return row.strip()
+
+
+def contains_street_token(street_text: str) -> bool:
+    return re.search(rf"\b{STREET_TOKEN_PATTERN}\b", street_text, re.IGNORECASE) is not None
+
+
+def parse_house_apartment_from_row(row_text: str) -> dict | None:
+    match = HOUSE_APT_RE.search(row_text)
+    if not match:
+        return None
+
+    street_name = match.group("street").strip()
+    house_number = match.group("house").strip()
+    apartment_number = match.group("apartment").strip()
+
+    if not contains_street_token(street_name):
+        return None
+
+    return {
+        "street": street_name,
+        "house": house_number,
+        "apartment": apartment_number,
+    }
+
+
+def find_address_block(rows: list[str]) -> str:
     """
     Build a text block containing "Aadress" line and (optionally) the next line if it looks like part of the address.
     """
-
-    for i, row in enumerate(rows):
-        if "aadress" in row.lower():
-            address_block = row.strip()
-
-            # Check next row for possible continuation
-            if i + 1 < len(rows):
-                next_row = rows[i + 1].strip()
-                if re.search(r"\d", next_row) and "reg. kood" not in next_row:
-                    address_block += " " + next_row
-            return address_block
-    raise ValidationError("Keyword 'aadress' not found in rows")
+    for row_idx, row in enumerate(rows):
+        norm_row = _norm_row(row)
+        if "aadress" in norm_row.lower():
+            return norm_row
+    return None
 
 
-def _extract_apartment_from_address(address_block: str) -> tuple[str, str]:
-    APARTMENT_RE = re.compile(r"\b(\d{1,3})-(\d+)\b")
+def strip_address_prefix(address_block: str) -> str:
+    parts = re.split(r"\baadress\b\s*[:\- ]\s*", address_block, flags=re.IGNORECASE, maxsplit=1)
+    return parts[-1].strip() if parts else address_block.strip()
 
-    # Find apartment matches like '113-64' in that block
-    matches = list(APARTMENT_RE.finditer(address_block))
 
-    if matches:
-        last_match = matches[-1]
-        house_number, apt_number = last_match.groups()
-        apartment = apt_number
+def score_candidate_row(row_text: str, apartment_nr: str, previous_apt: int | None) -> int:
+    score_value = 0
 
-        # Everything before the apartment number is the address
-        before_apt = address_block[: last_match.start()].strip()
-        address = f"{before_apt} {house_number}".strip()
+    if BLOCK_NEXTLINE_RE.search(row_text):
+        score_value -= 50
+
+    if re.search(r"\btel\b", row_text, re.IGNORECASE):
+        score_value += 8
+
+    if len(apartment_nr) >= 2:
+        score_value += 5
     else:
-        # No apartment match found, fallback to last part after splitting
-        apartment = ""
-        address = address_block
-        logging.info(
-            f"No apartment match found. Extracted address='{address}', apartment='{apartment}'"
-        )
-    return apartment, address
+        score_value -= 5
+
+    if previous_apt:
+        try:
+            apt_int = int(apartment_nr)
+            score_value += 3 if apt_int >= previous_apt else -3
+        except ValueError:
+            score_value -= 2
+
+    return score_value
 
 
-def extract_address_period_apartment(text):
+def find_best_house_apartment_candidate(rows: list[str], previous_apt: int | None) -> dict | None:
+    best_candidate = None
+    best_score = -10_000
+
+    for row_idx, row_text in enumerate(rows):
+        norm_row = _norm_row(row_text)
+        parsed = parse_house_apartment_from_row(norm_row)
+        if not parsed:
+            continue
+        
+        row_score = score_candidate_row(norm_row, parsed["apartment"], previous_apt)
+
+        if row_score > best_score:
+            print(f'Getting here! small score yayy')
+            best_score = row_score
+            best_candidate = {
+                "row_idx": row_idx,
+                "row_text": norm_row,
+                **parsed,
+                "score": row_score,
+            }
+    return best_candidate
+
+
+def pick_address_and_apt(rows: list[str], prev_apt: int | None) -> tuple[str, str]:
+    address_block = find_address_block(rows)
+
+    address_candidate = None
+    if address_block:
+        address_payload = strip_address_prefix(address_block)
+        address_candidate = parse_house_apartment_from_row(address_payload)
+
+    best_candidate = find_best_house_apartment_candidate(rows, prev_apt)
+
+    if best_candidate and (not address_candidate):
+        return f"{best_candidate['street']} {best_candidate['house']}", best_candidate["apartment"]
+    
+    if best_candidate and address_candidate:
+        # If mismatch, prefer global best (handles your “Aadress line garbled” cases)
+        if address_candidate["apartment"] != best_candidate["apartment"]:
+            return f"{best_candidate['street']} {best_candidate['house']}", best_candidate["apartment"]
+
+    # Otherwise trust Aadress
+    return f"{address_candidate['street']} {address_candidate['house']}", address_candidate["apartment"]
+
+    if address_candidate:
+        return f"{address_candidate['street']} {address_candidate['house']}", address_candidate["apartment"]
+
+    return "", ""
+
+
+def extract_address_period_apartment(text, prev_apt):
     rows = text.splitlines()
 
     # --- Address & apartment ---
-    address_block = build_address_block(rows)
-
-    # Strip "Aadress" prefix
-    after_label = re.split(r"aadress\s*[:\- ]\s*", address_block, flags=re.IGNORECASE)[
-        -1
-    ].strip()
-
-    # Extract apartment number
-    apartment, address = _extract_apartment_from_address(after_label)
+    address, apartment = pick_address_and_apt(rows, prev_apt)
 
     # Period
     period_parts = extract_parts(rows, "periood")

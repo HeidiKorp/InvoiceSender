@@ -104,8 +104,8 @@ def read_invoice_meta_col_a(sheet, max_rows=50):
     """ Read invoice metadata from given sheet. """
     period_text = _find_right_cell_value(sheet, "Periood", max_rows)
     address_text = _find_right_cell_value(sheet, "Aadress", max_rows)
-    print(f'Address text: "{address_text}"')
-    print(f'Period text: "{period_text}"')
+    # print(f'Address text: "{address_text}"')
+    # print(f'Period text: "{period_text}"')
     return {
         "period": _extract_period(period_text),
         "address": _extract_address(address_text),
