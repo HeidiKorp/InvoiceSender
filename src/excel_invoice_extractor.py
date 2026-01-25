@@ -160,7 +160,7 @@ def remove_forbidden_trailing_rows(worksheet, forbidden_labels: list[str], colum
         normalized = normalize_label(cell_text)
 
         if normalized in forbidden_norm:
-            print(f"Removing row {last_row} because it contains a forbidden label.")
+            # print(f"Removing row {last_row} because it contains a forbidden label.")
             worksheet.Rows(last_row).Delete()
             last_row -= 1
             continue
