@@ -345,18 +345,6 @@ def get_house_from_address_candidate(address_candidate: dict | None) -> str | No
     return address_candidate.get("house") or None
 
 
-
-# def find_address_block(rows: list[str]) -> str | None:
-#     """
-#     Build a text block containing "Aadress" line and (optionally) the next line if it looks like part of the address.
-#     """
-#     for row_idx, row in enumerate(rows):
-#         norm_row = _norm_row(row)
-#         if "aadress" in norm_row.lower():
-#             return norm_row
-#     return None
-
-
 def find_best_address_block(rows: list[str], prev_apt: int | None = None) -> str | None:
     best_row_text = None
     best_score = -10_000
@@ -490,8 +478,6 @@ def score_candidate_row(
         score += 6 if numeric_part >= 10 else 2
     else:
         score -= 2
-
-    # score += 8 if has_reasonable_apartment_digits(apartment_nr) else -1
 
     # if we know the expected house nr, prefer is strongly
     if expected_house and parsed["house"] == expected_house:
