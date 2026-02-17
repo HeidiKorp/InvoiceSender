@@ -4,7 +4,7 @@ import shutil, os, sys
 import configparser
 from dataclasses import dataclass
 
-from src.data_classes import InvoiceItem, InvoiceType
+from src.data_classes import InvoiceItem
 
 
 def create_invoice_dir(base_dir: Path, invoice: InvoiceItem) -> Path:
@@ -12,61 +12,6 @@ def create_invoice_dir(base_dir: Path, invoice: InvoiceItem) -> Path:
     invoices_dir = base_dir / invoice.address.replace(" ", "_") / invoice.period
     invoices_dir.mkdir(parents=True, exist_ok=True)
     return invoices_dir
-
-def load_app_version(config):
-    return config.get("app", "VERSION", fallback="1.0.0")
-
-
-def load_app_name(config):
-    config.get("app", "NAME", fallback="Arvete Saatja")
-    
-
-def load_invoice_types(config):
-    """Loads two types from config.cfg"""
-    hint = config.get("ui", "TYPE_HINT")
-
-    def read_section(section: str) -> InvoiceType:
-        return InvoiceType(
-            key=config.get(section, "KEY"),
-            label=config.get(section, "LABEL"),
-            subject=config.get(section, "SUBJECT"),
-            body=config.get(section, "BODY").replace("\\n", "\n")
-        )
-    t1 = read_section("invoice_type_kommunaal")
-    t2 = read_section("invoice_type_kyte")
-
-    types = {t1.key: t1, t2.key: t2}
-    return types, hint
-
-
-def get_config_path() -> str:
-    if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
-        return Path(os.path.join(base_dir, "_internal", "config.cfg"))
-    else:
-        return Path(__file__).parent.parent / "config.cfg"
-
-
-def read_config(filename: str = "config.cfg"):
-    config = configparser.ConfigParser()
-    config_path = get_config_path()
-
-    # bundled = _bundled_dir()
-    # if bundled:
-    #     canc
-
-    # config_path = resource_path("config.cfg")
-    # config_path = Path(__file__).parent.parent / "config.cfg"
-
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            config.read_file(f)
-        return config
-    except UnicodeDecodeError:
-        # Fallback if the file was saved in legacy Windows encoding
-        with config_path.open("r", encoding="cp1252") as f:
-            config.read_file(f)
-        return config
 
 
 def delete_folder(root, path_str):

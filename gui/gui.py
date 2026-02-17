@@ -13,12 +13,12 @@ from utils.logging_helper import (
     delete_old_error_log,
     _thread_excepthook,
 )
-from utils.file_utils import (
-    delete_folder,
+from utils.file_utils import delete_folder
+from utils.config_helpers import (
     read_config,
     load_invoice_types,
     load_app_version,
-    load_app_name,
+    load_app_name
 )
 from utils.ocr_helper import get_tesseract_cmd, check_ocr_environment
 from utils.gui_helpers import (

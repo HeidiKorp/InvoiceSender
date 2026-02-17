@@ -11,6 +11,7 @@ import pythoncom
 from utils.logging_helper import log_exception
 from utils.excel_app_helpers import excel_open_workbook
 from utils.file_utils import create_invoice_dir
+from utils.config_helpers import load_template_config, save_template_config
 from src.pdf_extractor import separate_invoices, save_each_invoice_as_file
 from src.xls_extractor import extract_person_data
 from src.data_classes import InvoiceItem, InvoiceBatch, ValidationError, create_invoice_batch, Cancelled
@@ -602,6 +603,70 @@ def _validate_email_inputs(top, subject_var, body_text):
     return subject, body
 
 
+def _get_current_editor_values(subject_var, body_text) -> tuple[str, str]:
+    """Get the current values from the email editor."""
+    subject = subject_var.get().strip()
+    body = body_text.get("1.0", "end-1c").strip() # no trailing newline
+    return subject, body
+
+
+def save_template_as(top, subject_var, body_text, initial_dir: str | None = None) -> None:
+    """Open a file dialog to save the current email template."""
+    subject, body = _get_current_editor_values(subject_var, body_text)
+
+    filename = filedialog.asksaveasfilename(
+        parent=top,
+        title="Salvesta meili mall (.cfg)",
+        initialdir=initial_dir,
+        defaultextension=".cfg",
+        filetypes=[("Template config", "*.cfg"), ("All files", "*.*")],
+    )
+
+    if not filename:
+        return  # User cancelled
+    
+    try:
+        save_template_config(filename, subject, body)
+        messagebox.showinfo("Salvestatud", f"Meili mall salvestatud:\n{filename}")
+    except Exception as e:
+        log_exception(e)
+        messagebox.showerror("Viga", f"Meili malli salvestamine ebaõnnestus:\n{e}")
+
+    
+def load_template_from_file(top, subject_var, body_text, initial_dir: str | None = None) -> None:
+    """Open a file dialog to load an email template and populate the editor."""
+    filename = filedialog.askopenfilename(
+        parent=top,
+        title="Laadi meili mall (.cfg)",
+        initialdir=initial_dir,
+        defaultextension=".cfg",
+        filetypes=[("Template config", "*.cfg"), ("All files", "*.*")],
+    )
+
+    if not filename:
+        return  # User cancelled
+
+    try:
+        subject, body = load_template_config(filename)
+
+        subject_var.set(subject)
+        
+        prev_state = str(body_text.cget("state"))
+        if prev_state != "normal":
+            body_text.config(state="normal")
+
+        body_text.delete("1.0", "end")
+        body_text.insert("1.0", body)
+        body_text.mark_set("insert", "1.0")
+        body_text.see("1.0")
+
+        if prev_state != "normal":
+            body_text.config(state=prev_state)
+    except Exception as e:
+        log_exception(e)
+        messagebox.showerror("Viga", f"Meili malli laadimine ebaõnnestus:\n{e}")
+
+
 def _close_email_editor(top):
     try:
         top.grab_release()
@@ -704,6 +769,22 @@ def _create_email_buttons_section(
         command=lambda: _cancel_email_editor(top, parent),
         width=12,
     ).pack(side=LEFT, padx=(0, 12), ipady=6)
+
+    tb.Button(
+        btns_frame,
+        text="Laadi mall",
+        bootstyle="info-outline",
+        command=lambda: load_template_from_file(top, subject_var, body_text),
+        width=14,
+    ).pack(side=RIGHT, ipady=6)
+
+    tb.Button(
+        btns_frame,
+        text="Salvesta mall",
+        bootstyle="primary-outline",
+        width=16,
+        command=lambda: save_template_as(top, subject_var, body_text),
+    ).pack(side=RIGHT, padx=(0, 12), ipady=6)
 
 
 def open_email_editor(parent, persons, invoices_dir, subject, body):
