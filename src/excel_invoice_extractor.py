@@ -102,6 +102,7 @@ def _export_sheet_to_pdf(sheet, output_dir: str):
 # --- Metadata extraction ---
 def read_invoice_meta_col_a(sheet, max_rows=50):
     """ Read invoice metadata from given sheet. """
+    print(f'Sheet data is: {sheet}')
     period_text = _find_right_cell_value(sheet, "Periood", max_rows)
     address_text = _find_right_cell_value(sheet, "Aadress", max_rows)
     # print(f'Address text: "{address_text}"')

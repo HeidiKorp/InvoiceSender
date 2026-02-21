@@ -359,7 +359,7 @@ def _worker_extract_and_process(
         raise ValidationError(f"Tundmatu arve tüüp: {invoice_type_key}")
 
 
-def _worker_finalize_invoices(parent, invoices, invoice_path):
+def _worker_finalize_invoices(parent, invoices, invoice_path, invoice_type):
     """Finalize invoices and create destination folder."""
     # Continue processing (back in main thread)
     parent.after(0, lambda: parent.status_label.configure(text="Töötlen andmeid..."))
@@ -371,17 +371,18 @@ def _worker_finalize_invoices(parent, invoices, invoice_path):
         raise Cancelled()
 
     example_invoice = invoices[0]
-    subject = f"Arve {example_invoice.period} {example_invoice.year}"
-    return dest, subject
+    subject, body = format_email_templates(invoice_type.subject, invoice_type.body, example_invoice)
+    # subject = f"Arve {example_invoice.period} {example_invoice.year}"
+    return dest, subject, body
 
 
 def worker(
-    parent, invoice_type_key, invoice_path, clients_path, template_root, subject, body
-):
+    parent, invoice_type_key, invoice_path, clients_path, template_root):
     """Worker thread function to process invoices and open email editor."""
     try:
         # OCR read-through (emits per-page progress)
         fname = os.path.basename(invoice_path)
+        invoice_type = parent.invoice_types.get(invoice_type_key)
 
         parent.after(0, lambda: parent.status_bar.pack(fill=X, side=BOTTOM))
         parent.after(0, lambda: parent.status_label.configure(text="Alustan..."))
@@ -402,7 +403,7 @@ def worker(
             parent.after(0, lambda: on_cancel_ui(parent))
             return
 
-        dest, subject = _worker_finalize_invoices(parent, invoices, invoice_path)
+        dest, subject, body = _worker_finalize_invoices(parent, invoices, invoice_path, invoice_type)
 
         if parent.cancel_event.is_set():
             parent.after(0, lambda: on_cancel_ui(parent))
@@ -489,8 +490,6 @@ def get_data_ready(
             invoice_path,
             clients_path,
             template_root,
-            subject,
-            body,
         ),
     )
 
@@ -719,6 +718,37 @@ def _run_outlook_job_async(parent, persons, invoices_dir, subject, body):
             parent.after(0, cleanup)
 
     threading.Thread(target=job, daemon=True).start()
+
+def build_template_context(invoice: InvoiceItem) -> dict:
+    # Build context for email template formatting
+    return {
+        "address": invoice.address,
+        "period": invoice.period,
+        "apartment": invoice.apartment,
+        "year": invoice.year,
+        "ky_name": invoice.ky_name or "",
+    }
+
+
+def extract_placeholders(template: str) -> set:
+    # Extract placeholders from template string
+    import string
+    formatter = string.Formatter()
+    return {field_name for _, field_name, _, _ in formatter.parse(template) if field_name}
+
+
+def format_email_templates(subject_template: str, body_template: str, invoice: InvoiceItem) -> tuple[str, str]:
+    # Format email subject and body using invoice data
+    context = build_template_context(invoice)
+
+    # Create a safe formatter that returns empty string for missing keys
+    safe_context = {key: context.get(key, "") for key in extract_placeholders(subject_template) | extract_placeholders(body_template)}
+    safe_context.update(context)  # Add all context just in case
+
+    formatted_subject = subject_template.format(**safe_context)
+    formatted_body = body_template.format(**safe_context)
+
+    return formatted_subject, formatted_body
 
 
 def save_and_close(parent, top, subject_var, body_text, persons, invoices_dir):

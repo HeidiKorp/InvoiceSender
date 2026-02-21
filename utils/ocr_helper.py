@@ -6,6 +6,7 @@ from PIL import Image, ImageOps, ImageFilter
 from utils.logging_helper import log_line
 
 
+
 def get_tesseract_cmd():
     if getattr(sys, "frozen", False):
         base_dir = os.path.dirname(sys.executable)
@@ -129,3 +130,6 @@ def run_ocr_on_image(img: Image.Image, lang: str, ocr_config: str, page_index: i
         logging.error(f"Unexpected error on page {i} of '{pdf_path}': {e}")
         logging.error(traceback.format_exc())
         return ""
+
+
+

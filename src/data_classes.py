@@ -24,6 +24,7 @@ class InvoiceItem:
     period: str
     apartment: str
     year: str
+    ky_name: Optional[str] = None # Placeholder for KY name
     pdf_page: Optional[object] = None # Placeholder for PDF page object
     excel_sheet_name: Optional[str] = None # Placeholder for Excel sheet object
 

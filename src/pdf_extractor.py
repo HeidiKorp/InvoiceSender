@@ -2,6 +2,7 @@ from pypdf import PdfReader, PdfWriter
 import pandas as pd
 from pathlib import Path
 import re
+from typing import Optional
 import io, gc, fitz, logging, sys, os
 from PIL import Image, ImageOps, ImageFilter
 import pytesseract
@@ -35,8 +36,13 @@ HOUSE_ONLY_APT_RE = re.compile(
     r"(?:\s*(?P<apt_suffix>[A-Za-z]))?\b",
     re.IGNORECASE,
 )
+KW_RE = re.compile(r"(?i)\b(kü|korteriühistu)\b")
+REMOVE_KW_RE = re.compile(r"(?i)\b(?:kü|korteriühistu)\b")
+EDGE_CLEAN_RE = re.compile(r"^[\s,;:\-–—]+|[\s,;:\-–—]+$")
 
-
+CUTOFF_RE = re.compile(
+    r"(?i)\b(?:aadress|address|viitenumber|kuupäev|kp|arve|arve\s*nr|telefon|tel|e-?post|email)\s*:"
+)
 
 logging.basicConfig(
     level=logging.INFO,  # 👈 enables INFO and above
@@ -74,9 +80,9 @@ def save_debug_data(entry):
 def _parse_invoice_page(
     page, text: str, page_number: int, pdf_path: str, prev_apt
 ) -> dict:
-
     _validate_page_text(text, page_number, pdf_path)
     client_data = extract_address_period_apartment(text, prev_apt)
+    ky_name = extract_ky_name_from_text(text)
 
     return InvoiceItem(
         pdf_page=page,
@@ -84,6 +90,7 @@ def _parse_invoice_page(
         period=client_data["period"],
         apartment=client_data["apartment"],
         year=client_data["year"],
+        ky_name=ky_name
     )
 
 
@@ -638,6 +645,51 @@ def extract_parts(rows, keyword, pattern=r"[:\- ]+"):
                     parts.extend(extra_parts)
             return parts
     raise ValidationError(f"Keyword '{keyword}' not found in rows")
+
+
+def extract_ky_name_from_line(line: str) -> Optional[str]:
+    if not KW_RE.search(line):
+        return None
+
+    # Keep only the first physical line in case OCR included line breaks
+    line = line.splitlines()[0]
+
+    if "," in line:
+        line = line.split(",")[-1]
+
+    # Remove "kü" or "korteriühistu" and trim
+    remainder = REMOVE_KW_RE.sub("", line)
+
+    # Cut off at known field labels like "Aadress:"
+    part = CUTOFF_RE.search(remainder)
+    if part:
+        remainder = remainder[: part.start()]
+
+    # Normalize whitespace
+    remainder = re.sub(r"\s+", " ", remainder).strip()
+
+    # Strip separators from edges
+    remainder = EDGE_CLEAN_RE.sub("", remainder).strip()
+
+    if not remainder:
+        return None 
+
+    return remainder
+
+
+def extract_ky_name_from_text(text: str) -> Optional[str]:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not KW_RE.search(line):
+            continue
+
+        name = extract_ky_name_from_line(line)
+        if name:
+            return name
+
+    return None
 
 
 def save_each_invoice_as_file(invoices, dest):
