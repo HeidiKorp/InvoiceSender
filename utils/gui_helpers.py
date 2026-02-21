@@ -190,6 +190,7 @@ def _extract_invoices_from_excel(invoice_path: str, cancel_flag, on_progress):
                 on_progress(
                     index,
                     total)
+        print("Done here!")
         return invoices
     return excel_open_workbook(invoice_path, extract_all, cancel_event=cancel_flag)
 

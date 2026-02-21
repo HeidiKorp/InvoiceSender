@@ -15,7 +15,7 @@ def excel_open_workbook(path: str, fn, cancel_event=None, shutdown_timeout=5.0):
     Open Excel + workbook, run function fn(workbook), close workbook and Excel.
     """
     absolute_path = os.path.abspath(path)
-
+    print(f"Opening Excel workbook at: {absolute_path}")
     pythoncom.CoInitialize()
     excel_app_instance = workbook = None
     excel_pid = None
@@ -38,6 +38,7 @@ def excel_open_workbook(path: str, fn, cancel_event=None, shutdown_timeout=5.0):
             IgnoreReadOnlyRecommended=True,
             AddToMru=False,
         )
+        print(f"Excel workbook opened. PID: {excel_pid}")
         if cancel_event is not None and cancel_event.is_set():
             raise Cancelled()
 
@@ -67,6 +68,7 @@ def excel_open_workbook(path: str, fn, cancel_event=None, shutdown_timeout=5.0):
             excel_app_instance = None
             gc.collect()
             pythoncom.CoUninitialize()
+    print("Excel process closed.")
 
 
 def excel_app():
