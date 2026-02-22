@@ -78,10 +78,10 @@ def save_debug_data(entry):
 
 
 def _parse_invoice_page(
-    page, text: str, page_number: int, pdf_path: str, prev_apt
+    page, text: str, page_number: int, pdf_path: str, prev_apt, period=None, year=None
 ) -> dict:
     _validate_page_text(text, page_number, pdf_path)
-    client_data = extract_address_period_apartment(text, prev_apt)
+    client_data = extract_address_period_apartment(text, prev_apt, period, year)
     ky_name = extract_ky_name_from_text(text)
 
     return InvoiceItem(
@@ -215,12 +215,13 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
 
     invoices: list[InvoiceItem] = []
     prev_apt: int | None = None
+    period, year = None, None
 
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        # print(f"Full text: \n{text}\n")
-        invoice = _parse_invoice_page(page, text, idx, pdf_path, prev_apt)
+        invoice = _parse_invoice_page(page, text, idx, pdf_path, prev_apt, period, year)
+        period = invoice.period
+        year = invoice.year
         invoices.append(invoice)
-        # print("\n")
         try:
             prev_apt = apartment_numeric_part(str(invoice.apartment)) or prev_apt
         except ValueError:
@@ -610,20 +611,22 @@ def pick_address_and_apt(rows: list[str], prev_apt: int | None) -> tuple[str, st
     return "", ""
 
 
-def extract_address_period_apartment(text, prev_apt):
+def extract_address_period_apartment(text, prev_apt, period=None, year=None):
     rows = text.splitlines()
 
     # --- Address & apartment ---
     address, apartment = pick_address_and_apt(rows, prev_apt)
     # print(f"Chose address and apt: {address} {apartment}")
 
-    # Period
-    period_parts = extract_parts(rows, "periood")
-    period = period_parts[1] if len(period_parts) > 1 else ""
+    if not period:
+        # Period
+        period_parts = extract_parts(rows, "periood")
+        period = period_parts[1] if len(period_parts) > 1 else ""
 
-    # Year
-    year_parts = extract_parts(rows, "kuupäev", pattern=r"[:\-\. ]+")
-    year = year_parts[-1] if len(year_parts) > 1 else ""
+    if not year:
+        # Year
+        year_parts = extract_parts(rows, "kuupäev", pattern=r"[:\-\. ]+")
+        year = year_parts[-1] if len(year_parts) > 1 else ""
 
     return {"address": address, "apartment": apartment, "period": period, "year": year}
 
