@@ -8,10 +8,10 @@ import winreg
 from collections import Counter
 
 from utils.logging_helper import log_exception
-from src.data_classes import ValidationError
 
 OUTLOOK_MAIL_ITEM = 0
 OUTLOOK_FOLDER_DRAFTS = 16
+INVOICE_FILE_EXTENSIONS = frozenset({".pdf"})
 
 
 def get_outlook_path():
@@ -103,11 +103,17 @@ def ensure_outlook_ready(timeout=15):
     ) from last_err
 
 
+def _apartment_key(value) -> str:
+    return str(value).strip()
+
+
 def apartments_from_persons(persons):
-    return {str(p.apartment).strip() for p in persons if str(p.apartment).strip()}
+    return {_apartment_key(p.apartment) for p in persons if _apartment_key(p.apartment)}
 
 
-def apartments_from_invoices(invoices_dir, exts={".pdf"}):
+def apartments_from_invoices(invoices_dir, exts=None):
+    if exts is None:
+        exts = INVOICE_FILE_EXTENSIONS
     counts = Counter()
     for p in Path(invoices_dir).iterdir():
         if p.is_file() and p.suffix.lower() in exts:
@@ -125,6 +131,7 @@ def _check_missing_invoices(person_apts, invoice_apts):
 def _check_extra_invoices(person_apts, invoice_apts):
     """ Check for invoice files that don't match any person. """
     return sorted(invoice_apts - person_apts, key=str)
+
 
 def _check_duplicate_invoices(invoice_counts):
     """ Check for duplicate invoice files for the same apartment. """
@@ -145,27 +152,54 @@ def _build_validation_errors(missing, extra, duplicates):
         )
     return problems
 
-def validate_persons_vs_invoices(persons, invoices_dir):
+
+def _matched_persons_by_apartment(persons, invoice_apts, excluded_apts):
+    """Keep every person whose apartment has a unique invoice. Emails are not used."""
+    matched = []
+    for person in persons:
+        apartment = _apartment_key(person.apartment)
+        if apartment in invoice_apts and apartment not in excluded_apts:
+            matched.append(person)
+    return matched
+
+
+def _pair_persons_to_invoice_apartments(persons, invoice_counts):
     person_apts = apartments_from_persons(persons)
-    invoice_counts = apartments_from_invoices(invoices_dir)
     invoice_apts = set(invoice_counts.keys())
 
-
-    # Who's missing an invoice?
     missing_for_people = _check_missing_invoices(person_apts, invoice_apts)
-
-    # Invoices that don't match any pattern
     extra_invoices = _check_extra_invoices(person_apts, invoice_apts)
-
-    # Duplicates (same apartment has >1 file)
     duplicates = _check_duplicate_invoices(invoice_counts)
 
     problems = _build_validation_errors(
         missing_for_people, extra_invoices, duplicates
     )
+    excluded_apts = set(missing_for_people) | set(duplicates)
+    matched_persons = _matched_persons_by_apartment(
+        persons, invoice_apts, excluded_apts
+    )
+    return matched_persons, problems
 
-    if problems:
-        raise ValidationError(" ".join(problems))
+
+def validate_persons_vs_invoice_items(persons, invoices):
+    """Pair people to this run's invoices by apartment number only.
+
+    Emails are not part of the match. One apartment may have several
+    addresses, and the same address may appear on several apartments.
+    """
+    invoice_counts = Counter(
+        _apartment_key(invoice.apartment)
+        for invoice in invoices
+        if _apartment_key(invoice.apartment)
+    )
+    return _pair_persons_to_invoice_apartments(persons, invoice_counts)
+
+
+def validate_persons_vs_invoices(persons, invoices_dir):
+    """Report mismatches from invoice files and return only unique matches."""
+    return _pair_persons_to_invoice_apartments(
+        persons, apartments_from_invoices(invoices_dir)
+    )
 
 
 def _create_email_draft(
@@ -193,18 +227,24 @@ def save_emails_with_invoices(persons, invoices_dir, subject, body):
     """Create email drafts in Outlook for each person with their invoice attached."""
     outlook = win32.Dispatch("outlook.application")
     ns = outlook.Session
-    
-    not_found_invoices = []
+
     for person in persons:
         invoice_path = get_person_invoice(person.apartment, invoices_dir)
-
-        if invoice_path:
-            for email in person.emails:
-                _create_email_draft(outlook, invoice_path, email, subject, body)
+        if not invoice_path:
+            continue
+        for email in person.emails:
+            _create_email_draft(outlook, invoice_path, email, subject, body)
+            print(f"Created email draft for {person.apartment} to {email}")
 
     # Open drafts folder in Outlook after creating all drafts
     drafts_folder = ns.GetDefaultFolder(OUTLOOK_FOLDER_DRAFTS)
     drafts_folder.Display()
+
+
+def persons_with_invoices(persons, invoices_dir):
+    """Return only people who have a unique matching invoice PDF."""
+    matched_persons, _problems = validate_persons_vs_invoices(persons, invoices_dir)
+    return matched_persons
 
 
 def send_drafts(parent):
@@ -243,7 +283,8 @@ def send_drafts(parent):
 
 
 def get_person_invoice(person_apartment, invoices_dir):
-    invoice_path = invoices_dir / f"{person_apartment}.pdf"
+    apartment = _apartment_key(person_apartment)
+    invoice_path = Path(invoices_dir) / f"{apartment}.pdf"
     if invoice_path.exists():
         return str(invoice_path)
     else:

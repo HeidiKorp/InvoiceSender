@@ -18,7 +18,7 @@ from src.data_classes import InvoiceItem, InvoiceBatch, ValidationError, create_
 from src.email_sender import (
     save_emails_with_invoices,
     ensure_outlook_ready,
-    validate_persons_vs_invoices,
+    validate_persons_vs_invoice_items,
 )
 from src.excel_invoice_extractor import (
     save_excel_invoices_as_pdfs,
@@ -282,9 +282,18 @@ def finalize_after_saved(parent, batch: InvoiceBatch, template_root):
         # invoices_dir = batch.save_invoices(batch.invoices, batch.dest_dir)
         print(f"Invoices saved to: {batch.dest_dir}")
 
+        matched_persons, problems = validate_persons_vs_invoice_items(
+            batch.persons, batch.invoices
+        )
+        if problems:
+            messagebox.showerror("Viga", " ".join(problems))
+        if not matched_persons:
+            return
+
+        batch.persons = matched_persons
         open_email_editor(
             parent,
-            batch.persons,
+            matched_persons,
             batch.dest_dir,
             batch.subject,
             batch.body,
@@ -496,13 +505,10 @@ def get_data_ready(
 
 
 def open_outlook(persons, invoices_dir, subject, body):
-    """Open Outlook email editor with prepared emails."""
-    # Compose emails and send them
+    """Create Outlook drafts for the already-matched persons."""
     ensure_outlook_ready()
-    try:
-        validate_persons_vs_invoices(persons, invoices_dir)
-    except ValidationError as e:
-        messagebox.showerror("Viga", str(e))
+    if not persons:
+        return
     save_emails_with_invoices(persons, invoices_dir, subject, body)
 
 

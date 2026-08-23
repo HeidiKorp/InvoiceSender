@@ -40,8 +40,13 @@ def split_emails(email_string: str) -> list[str]:
         raise ValidationError("Meiliaadress on kohustuslik")
     parts = [part.strip() for part in re.split(r"[;,]", email_string) if part.strip()]
     valid_emails = []
+    seen = set()
     for part in parts:
         validate_email(part)
+        key = unicodedata.normalize("NFKC", part).strip().casefold()
+        if key in seen:
+            continue
+        seen.add(key)
         valid_emails.append(part)
     if not valid_emails:
         raise ValidationError("Puuduvad kehtivad meiliaadressid")

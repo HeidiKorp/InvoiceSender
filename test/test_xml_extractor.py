@@ -1,5 +1,13 @@
+import sys
+from pathlib import Path
+
 import pytest
-from xls_extractor import validate_email, split_emails
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.xls_extractor import split_emails, validate_email
 
 
 @pytest.mark.parametrize("email", [
@@ -23,6 +31,20 @@ def test_validate_email_valid(email):
 def test_validate_email_invalid(email):
     with pytest.raises(ValueError):
         validate_email(email)
+
+
+def test_split_emails_keeps_unique_addresses_in_order():
+    assert split_emails("alice@example.com; bob@example.com") == [
+        "alice@example.com",
+        "bob@example.com",
+    ]
+
+
+def test_split_emails_keeps_repeated_address_once_on_the_same_row():
+    assert split_emails("korpheidi@gmail.com; korpheidi@gmail.com") == [
+        "korpheidi@gmail.com"
+    ]
+    assert split_emails("A@example.com, a@example.com") == ["A@example.com"]
 
 
     
