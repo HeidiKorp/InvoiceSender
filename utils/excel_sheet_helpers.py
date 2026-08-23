@@ -1,12 +1,9 @@
 import os, re, time
-import pythoncom
-import win32com.client as win32
 
 from utils.logging_helper import log_exception
 from utils.excel_constants import XL_FORMULAS, XL_PART, XL_BY_ROWS, XL_BY_COLUMNS, XL_PREVIOUS
 
 
-# --- Trailing empty space trimming ---
 def set_printarea_to_last_content(sheet):
     """ Set print area to used range, trimming trailing empty rows/columns. """
     row, col = _last_content_row_col(sheet)
@@ -14,23 +11,6 @@ def set_printarea_to_last_content(sheet):
         sheet.PageSetup.PrintArea = "$A$1:$A$1"
         return
     sheet.PageSetup.PrintArea = f"$A$1:${col_letter(col)}${row}"
-
-
-def _last_content_row_col(sheet):
-    """ Uses Excel FInd(*) to find last non-empty cell's row and column. """
-    try:
-        last_row_cell = sheet.Cells.Find("*", sheet.Cells(1, 1), 
-                                          LookIn=XL_FORMULAS, LookAt=XL_PART,
-                                          SearchOrder=XL_BY_ROWS, SearchDirection=XL_PREVIOUS, MatchCase=False)
-        last_col_cell = sheet.Cells.Find("*", sheet.Cells(1, 1), 
-                                          LookIn=XL_FORMULAS, LookAt=XL_PART, SearchOrder=XL_BY_COLUMNS,
-                                          SearchDirection=XL_PREVIOUS, MatchCase=False)
-        if not last_row_cell or not last_col_cell:
-            return None, None
-        return int(last_row_cell.Row), int(last_col_cell.Column)
-    except Exception as e:
-        log_exception(e)
-        return None, None
 
 
 def col_letter(col_idx: int) -> str:
@@ -42,8 +22,6 @@ def col_letter(col_idx: int) -> str:
     return letters
 
 
-# TODO: Move to utils/file_utils.py
-# TODO: Make the excel output_dir include period and address
 def make_output_dir(base_dir: str, prefix="Arved"):
     """ Create a new output directory with given prefix in base_dir. """
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -54,6 +32,23 @@ def make_output_dir(base_dir: str, prefix="Arved"):
 
 def safe_filename(name: str) -> str:
     name = str(name).strip()
-    name = re.sub(r"[<>:\"/\\|?*\x00-\x1F]", "", name) # Windows forbidden chars
-    name = re.sub(r"\s+", "_", name) # Replace whitespace with underscore
+    name = re.sub(r"[<>:\"/\\|?*\x00-\x1F]", "", name)
+    name = re.sub(r"\s+", "_", name)
     return name
+
+
+def _last_content_row_col(sheet):
+    """ Uses Excel Find(*) to find last non-empty cell's row and column. """
+    try:
+        last_row_cell = sheet.Cells.Find("*", sheet.Cells(1, 1),
+                                          LookIn=XL_FORMULAS, LookAt=XL_PART,
+                                          SearchOrder=XL_BY_ROWS, SearchDirection=XL_PREVIOUS, MatchCase=False)
+        last_col_cell = sheet.Cells.Find("*", sheet.Cells(1, 1),
+                                          LookIn=XL_FORMULAS, LookAt=XL_PART, SearchOrder=XL_BY_COLUMNS,
+                                          SearchDirection=XL_PREVIOUS, MatchCase=False)
+        if not last_row_cell or not last_col_cell:
+            return None, None
+        return int(last_row_cell.Row), int(last_col_cell.Column)
+    except Exception as e:
+        log_exception(e)
+        return None, None

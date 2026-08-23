@@ -1,225 +1,196 @@
-import os, re, time
-import pythoncom
-import win32com.client as win32
 from datetime import datetime
-from pathlib import Path
+import os, re
 
-from utils.logging_helper import log_exception
 from utils.excel_app_helpers import excel_open_workbook, close_workbook, quit_excel
-from utils.excel_sheet_helpers import set_printarea_to_last_content, make_output_dir, safe_filename, col_letter
-from utils.excel_constants import (XL_FORMULAS, XL_PART, XL_BY_ROWS, XL_BY_COLUMNS, XL_PREVIOUS, XL_NEXT, XL_VALUES,
-                                   PDF_TYPE, PDF_QUALITY_STANDARD)
-from src.data_classes import InvoiceItem, Cancelled
-from utils.file_utils import create_invoice_dir
-
-ESTONIAN_MONTHS = {
-    1: "jaanuar", 2: "veebruar", 3: "märts", 4: "aprill",
-    5: "mai", 6: "juuni", 7: "juuli", 8: "august",
-    9: "september", 10: "oktoober", 11: "november", 12: "detsember",
-}
-
-def save_excel_invoices_as_pdfs(invoice_batch: "InvoiceBatch", on_progress=None, cancel_event=None) -> Path:
-    parent = invoice_batch.parent
-    cancel_event = invoice_batch.cancel_event
-    invoices = invoice_batch.invoices
-
-    total = len(invoices)
-    fname = os.path.basename(invoice_batch.invoice_path)
-    
-    if on_progress:
-        on_progress(0, total, f"Alustan töötlemist...")
-
-    def export_all(_excel, workbook):
-        for index, invoice in enumerate(invoices, start=1):
-            if cancel_event.is_set():
-                close_workbook(workbook)
-                quit_excel(_excel)
-                raise Cancelled
-
-            sheet_name = invoice.excel_sheet_name
-            worksheet = workbook.Sheets(sheet_name)
-
-            set_printarea_to_last_content(worksheet)
-
-            remove_forbidden_trailing_rows(
-                worksheet,
-                forbidden_labels=["Radiaator 13", "Radiaator 14"],
-                column_index=1,
-            )
-
-            set_printarea_to_last_content(worksheet)
-
-            pdf_path = invoice_batch.dest_dir / f"{invoice.apartment}.pdf"
-
-            worksheet.ExportAsFixedFormat(
-                Type=PDF_TYPE,  # PDF
-                Filename=str(pdf_path),
-                Quality=PDF_QUALITY_STANDARD,  # Standard
-                IncludeDocProperties=True,
-                IgnorePrintAreas=False,
-                OpenAfterPublish=False,
-            )
-            on_progress(index, total, f"Salvestan Exceli lehti {index}/{total} - {fname}")
-
-    return excel_open_workbook(invoice_batch.invoice_path, export_all, cancel_event=cancel_event)
+from utils.excel_sheet_helpers import set_printarea_to_last_content
+from utils.excel_constants import PDF_TYPE, PDF_QUALITY_STANDARD
+from utils.logging_helper import log_exception
+from src.data_classes import (
+    InvoiceItem,
+    Cancelled,
+    ValidationError,
+    ESTONIAN_MONTHS,
+    is_valid_address,
+    is_valid_period,
+    is_valid_year,
+)
 
 
-def create_excel_invoices(sheets: list, meta: dict) -> list[InvoiceItem]:
-    """ Create ExcelInvoice objects from given sheets and shared metadata. """
-    invoices = []
-    for sheet in sheets:
-        invoice = InvoiceItem(
-            excel_sheet_name=sheet,
-            address=meta.get("address", ""),
-            period=meta.get("period", ""),
-            apartment=meta.get("apartment", ""),
-            year=meta.get("year", ""),
+class ExcelInvoiceExtractor:
+    def load(self, invoice_path, on_progress=None, cancel_event=None) -> list[InvoiceItem]:
+        def extract_all(_excel, workbook):
+            sheet_names = self._korter_sheet_names(workbook)
+            if not sheet_names:
+                raise ValidationError("Excelis pole lehti nimega 'Korter ...'")
+
+            total = len(sheet_names)
+            if on_progress:
+                on_progress(0, total)
+
+            meta = self._read_shared_invoice_meta(workbook, sheet_names)
+
+            invoices = []
+            for index, sheet_name in enumerate(sheet_names, start=1):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise Cancelled
+
+                invoices.append(
+                    InvoiceItem(
+                        apartment=self._extract_apartment(sheet_name),
+                        excel_sheet_name=sheet_name,
+                        address=meta.get("address"),
+                        period=meta.get("period"),
+                        year=meta.get("year"),
+                    )
+                )
+                if on_progress:
+                    on_progress(index, total)
+            return invoices
+
+        return excel_open_workbook(
+            invoice_path, extract_all, cancel_event=cancel_event
         )
-        invoices.append(invoice)
-    return invoices
 
+    def save(self, invoice_batch, on_progress=None):
+        cancel_event = invoice_batch.cancel_event
+        invoices = invoice_batch.invoices
+        total = len(invoices)
+        fname = os.path.basename(invoice_batch.invoice_path)
 
-# --- Sheet selection and export ---
+        if on_progress:
+            on_progress(0, total, f"Alustan töötlemist...")
 
-def get_korter_sheet_names(wb) -> list[str]:
-    """ Return list of sheets named "Korter X" where X is a number. """
-    pattern = re.compile(r"^Korter\s+\d+$", re.IGNORECASE)
-    return [ws.Name for ws in wb.Sheets if pattern.match(str(ws.Name))]
+        def export_all(_excel, workbook):
+            for index, invoice in enumerate(invoices, start=1):
+                if cancel_event.is_set():
+                    close_workbook(workbook)
+                    quit_excel(_excel)
+                    raise Cancelled
 
+                sheet_name = invoice.excel_sheet_name
+                worksheet = workbook.Sheets(sheet_name)
 
-def _export_sheet_to_pdf(sheet, output_dir: str):
-    pdf_path = os.path.join(output_dir, f"{_safe_filename(sheet.Name)}.pdf")
-    sheet.ExportAsFixedFormat(
-        Type=PDF_TYPE,  # PDF
-        Filename=pdf_path,
-        Quality=PDF_QUALITY_STANDARD,  # Standard
-        IncludeDocProperties=True,
-        IgnorePrintAreas=False,
-        OpenAfterPublish=False,
-    )
+                set_printarea_to_last_content(worksheet)
+                self._remove_forbidden_trailing_rows(
+                    worksheet,
+                    forbidden_labels=["Radiaator 13", "Radiaator 14"],
+                    column_index=1,
+                )
+                set_printarea_to_last_content(worksheet)
 
+                pdf_path = invoice_batch.dest_dir / f"{invoice.apartment}.pdf"
+                worksheet.ExportAsFixedFormat(
+                    Type=PDF_TYPE,
+                    Filename=str(pdf_path),
+                    Quality=PDF_QUALITY_STANDARD,
+                    IncludeDocProperties=True,
+                    IgnorePrintAreas=False,
+                    OpenAfterPublish=False,
+                )
+                on_progress(index, total, f"Salvestan Exceli lehti {index}/{total} - {fname}")
 
-# --- Metadata extraction ---
-def read_invoice_meta_col_a(sheet, max_rows=50):
-    """ Read invoice metadata from given sheet. """
-    print(f'Sheet data is: {sheet}')
-    period_text = _find_right_cell_value(sheet, "Periood", max_rows)
-    address_text = _find_right_cell_value(sheet, "Aadress", max_rows)
-    # print(f'Address text: "{address_text}"')
-    # print(f'Period text: "{period_text}"')
-    return {
-        "period": _extract_period(period_text),
-        "address": _extract_address(address_text),
-        "year": _extract_year(period_text),
-    }
+        return excel_open_workbook(
+            invoice_batch.invoice_path, export_all, cancel_event=cancel_event
+        )
 
-def _extract_address(text: str) -> str:
-    """ Extract address from text by removing apartment number if present. """
-    return text.split(",")[0].strip()
+    def _korter_sheet_names(self, workbook) -> list[str]:
+        pattern = re.compile(r"^Korter\s+\d+$", re.IGNORECASE)
+        return [ws.Name for ws in workbook.Sheets if pattern.match(str(ws.Name))]
 
+    def _read_shared_invoice_meta(self, workbook, sheet_names: list[str]) -> dict:
+        combined = {"period": "", "address": "", "year": ""}
+        for sheet_name in sheet_names:
+            meta = self._read_invoice_meta(workbook.Sheets(sheet_name))
+            if not is_valid_period(combined["period"]) and is_valid_period(meta.get("period")):
+                combined["period"] = meta["period"]
+            if not is_valid_address(combined["address"]) and is_valid_address(
+                meta.get("address")
+            ):
+                combined["address"] = meta["address"]
+            if not is_valid_year(combined["year"]) and is_valid_year(meta.get("year")):
+                combined["year"] = meta["year"]
+            if (
+                is_valid_period(combined["period"])
+                and is_valid_address(combined["address"])
+                and is_valid_year(combined["year"])
+            ):
+                break
+        return combined
 
-def extract_apartment(text: str) -> str:
-    """ Extract apartment number from text, if present. """
-    return text.split(" ")[-1].strip()
+    def _read_invoice_meta(self, sheet, max_rows=50):
+        period_text = self._find_right_cell_value(sheet, "Periood", max_rows)
+        address_text = self._find_right_cell_value(sheet, "Aadress", max_rows)
+        return {
+            "period": self._extract_period(period_text),
+            "address": self._extract_address(address_text),
+            "year": self._extract_year(period_text),
+        }
 
+    def _extract_apartment(self, text: str) -> str:
+        return text.split(" ")[-1].strip()
 
-def _extract_year(text: str) -> str:
-    """ Extract year from text. """
-    return text.split(".")[-1].strip()
+    def _extract_address(self, text: str) -> str:
+        return text.split(",")[0].strip()
 
+    def _extract_year(self, text: str) -> str:
+        year = text.split(".")[-1].strip()
+        return year if is_valid_year(year) else ""
 
-def _extract_period(text: str) -> str:
-    """ Extract period from text. """
-    match = re.search(r"(\d{1,2}\.\d{1,2}\.\d{4})\s*$", text.strip())
-    if not match:
-        return ""
-    parsed_date = datetime.strptime(match.group(1), "%d.%m.%Y")
-    return ESTONIAN_MONTHS[parsed_date.month]
+    def _extract_period(self, text: str) -> str:
+        match = re.search(r"(\d{1,2}\.\d{1,2}\.\d{4})\s*$", text.strip())
+        if not match:
+            return ""
+        parsed_date = datetime.strptime(match.group(1), "%d.%m.%Y")
+        return ESTONIAN_MONTHS[parsed_date.month]
 
-
-def _find_right_cell_value(sheet, label: str, max_rows=50) -> str:
-    """ Find cell with given label and return value of the cell to its right. """
-    target_label = normalize_label(label)
-
-    for row_idx in range(1, max_rows + 1):
-        cell = sheet.Cells(row_idx, 1)  # Column A
-        cell_text = normalize_label(get_cell_text(cell))
-        if cell_text != target_label:
-            continue
-
-        value_cell = sheet.Cells(row_idx, 2)  # Column B
-        return get_cell_text(value_cell).strip()
-    return ""
-
-
-def remove_forbidden_trailing_rows(worksheet, forbidden_labels: list[str], column_index: int = 1):
-    forbidden_norm = {normalize_label(label) for label in forbidden_labels}
-
-    last_row = get_last_used_row(worksheet)
-    while last_row >= 1:
-        cell_text = get_cell_text(worksheet.Cells(last_row, column_index))
-        normalized = normalize_label(cell_text)
-
-        if normalized in forbidden_norm:
-            # print(f"Removing row {last_row} because it contains a forbidden label.")
-            worksheet.Rows(last_row).Delete()
-            last_row -= 1
-            continue
-        break # No more forbidden rows at the end
-
-
-def get_last_used_row(worksheet) -> int:
-    used_range = worksheet.UsedRange
-    start_row = used_range.Row
-    row_count = used_range.Rows.Count
-    return int(start_row + row_count - 1)
-
-
-def get_cell_text(cell) -> str:
-    """ Safely get cell text, handling merged cells. """
-    try:
-        displayed_text = cell.Text
-        if displayed_text is not None and str(displayed_text).strip():
-            return str(displayed_text)
-    except Exception as e:
-        log_exception(e)
-        pass
-
-    try:
-        raw_value = cell.Value
-        return "" if raw_value is None else str(raw_value)
-    except Exception as e:
-        log_exception(e)
+    def _find_right_cell_value(self, sheet, label: str, max_rows=50) -> str:
+        target_label = self._normalize_label(label)
+        for row_idx in range(1, max_rows + 1):
+            cell = sheet.Cells(row_idx, 1)
+            cell_text = self._normalize_label(self._get_cell_text(cell))
+            if cell_text != target_label:
+                continue
+            value_cell = sheet.Cells(row_idx, 2)
+            return self._get_cell_text(value_cell).strip()
         return ""
 
+    def _remove_forbidden_trailing_rows(
+        self, worksheet, forbidden_labels: list[str], column_index: int = 1
+    ):
+        forbidden_norm = {self._normalize_label(label) for label in forbidden_labels}
+        last_row = self._get_last_used_row(worksheet)
+        while last_row >= 1:
+            cell_text = self._get_cell_text(worksheet.Cells(last_row, column_index))
+            if self._normalize_label(cell_text) in forbidden_norm:
+                worksheet.Rows(last_row).Delete()
+                last_row -= 1
+                continue
+            break
 
-def normalize_label(label: str) -> str:
-    """ Normalize label for comparison: lowercase, strip whitespace and trailing colon. """
-    norm = "" if label is None else str(label).strip().lower()
-    norm = norm.replace("\xa0", " ") # non-breaking space
-    norm = norm[:1].strip() if norm.endswith(":") else norm
-    return " ".join(norm.split())
+    def _get_last_used_row(self, worksheet) -> int:
+        used_range = worksheet.UsedRange
+        start_row = used_range.Row
+        row_count = used_range.Rows.Count
+        return int(start_row + row_count - 1)
 
+    def _get_cell_text(self, cell) -> str:
+        try:
+            displayed_text = cell.Text
+            if displayed_text is not None and str(displayed_text).strip():
+                return str(displayed_text)
+        except Exception as e:
+            log_exception(e)
 
-def debug_print_range(ws, nrows=40, ncols=8, start_row=1, start_col=1):
-    """
-    Prints a rectangular block from the worksheet.
-    Good for seeing what values Excel COM actually returns.
-    """
-    rng = ws.Range(ws.Cells(start_row, start_col), ws.Cells(start_row + nrows - 1, start_col + ncols - 1))
-    values = rng.Value  # tuple of tuples (rows)
+        try:
+            raw_value = cell.Value
+            return "" if raw_value is None else str(raw_value)
+        except Exception as e:
+            log_exception(e)
+            return ""
 
-    # Header line with column letters
-    col_letters = [col_letter(start_col + i) for i in range(ncols)]
-    print("      " + " | ".join(f"{c:>12}" for c in col_letters))
-    print("      " + "-" * (15 * ncols))
-
-    for r_idx, row in enumerate(values, start=start_row):
-        cells = []
-        for v in row:
-            s = "" if v is None else str(v)
-            s = s.replace("\n", " ").strip()
-            if len(s) > 12:
-                s = s[:11] + "…"
-            cells.append(f"{s:>12}")
-        print(f"{r_idx:>4}: " + " | ".join(cells))
+    def _normalize_label(self, label: str) -> str:
+        norm = "" if label is None else str(label).strip().lower()
+        norm = norm.replace("\xa0", " ")
+        if norm.endswith(":"):
+            norm = norm[:-1].strip()
+        return " ".join(norm.split())

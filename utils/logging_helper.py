@@ -1,28 +1,30 @@
-import os, sys
-import traceback
+import os, sys, traceback, threading
+from datetime import datetime
 
 from utils.file_utils import get_log_path
 
-def log_exc_triple(exc_type, exc_value, exc_tb):
+
+def log_exception(error: BaseException | str, operation: str = "") -> None:
+    if isinstance(error, str):
+        error = RuntimeError(error)
+    log_exc_triple(type(error), error, error.__traceback__, operation=operation)
+
+
+def log_exc_triple(exc_type, exc_value, exc_tb, operation: str = ""):
     log_path = get_log_path()
     try:
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write("=== Exception ===\n")
-            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+            f.write(_format_exception_entry(exc_type, exc_value, exc_tb, operation))
+            f.write("\n")
     except Exception:
         pass
 
-sys.excepthook = log_exc_triple
 
-def _thread_excepthook(args):
-    log_exc_triple(args.exc_type, args.exc_value, args.exc_traceback)
-
-
-def log_exception(e: Exception):
-    exc_type = type(e)
-    exc_value = e
-    exc_tb = e.__traceback__
-    log_exc_triple(exc_type, exc_value, exc_tb)
+def log_line(msg: str):
+    """Write a non-exception diagnostic line. Prefer log_exception for failures."""
+    with open(get_log_path(), "a", encoding="utf-8") as f:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"{timestamp} {msg}\n")
 
 
 def delete_old_error_log():
@@ -31,9 +33,43 @@ def delete_old_error_log():
         try:
             os.remove(log_path)
         except Exception:
-            # If deletion fails, overwrite instead of crash
             open(log_path, "w").close()
 
-def log_line(msg: str):
-    with open(get_log_path(), "a", encoding="utf-8") as f:
-        f.write(msg + "\n")
+
+def _format_exception_entry(
+    exc_type, exc_value, exc_tb, operation: str = ""
+) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    thread_name = threading.current_thread().name
+    type_name = getattr(exc_type, "__name__", str(exc_type))
+    message = str(exc_value)
+    op = operation or "-"
+    lines = [
+        f"=== {timestamp} [{thread_name}] {op} ===",
+        f"Type: {type_name}",
+        f"Message: {message}",
+        "Traceback:",
+    ]
+    if exc_tb is not None:
+        lines.append(
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb)).rstrip()
+        )
+    else:
+        lines.append(
+            "".join(traceback.format_exception_only(exc_type, exc_value)).rstrip()
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _thread_excepthook(args):
+    log_exc_triple(
+        args.exc_type,
+        args.exc_value,
+        args.exc_traceback,
+        operation="thread",
+    )
+
+
+sys.excepthook = log_exc_triple
+threading.excepthook = _thread_excepthook

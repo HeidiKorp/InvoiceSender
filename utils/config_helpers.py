@@ -9,16 +9,37 @@ from src.data_classes import InvoiceType
 TEMPLATE_SECTION = "email_template"
 
 
+def read_config(filename: str = "config.cfg"):
+    config = ConfigParser()
+    config_path = get_config_path()
+
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            config.read_file(f)
+        return config
+    except UnicodeDecodeError:
+        with config_path.open("r", encoding="cp1252") as f:
+            config.read_file(f)
+        return config
+
+
+def get_config_path() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+        return Path(os.path.join(base_dir, "_internal", "config.cfg"))
+    else:
+        return Path(__file__).parent.parent / "config.cfg"
+
+
+def load_app_name(config):
+    return config.get("app", "NAME", fallback="Arvete Saatja")
+
+
 def load_app_version(config):
     return config.get("app", "VERSION", fallback="1.0.0")
 
 
-def load_app_name(config):
-    config.get("app", "NAME", fallback="Arvete Saatja")
-    
-
 def load_invoice_types(config):
-    """Loads two types from config.cfg"""
     hint = config.get("ui", "TYPE_HINT")
 
     def read_section(section: str) -> InvoiceType:
@@ -33,38 +54,6 @@ def load_invoice_types(config):
 
     types = {t1.key: t1, t2.key: t2}
     return types, hint
-
-
-def get_config_path() -> str:
-    if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
-        return Path(os.path.join(base_dir, "_internal", "config.cfg"))
-    else:
-        return Path(__file__).parent.parent / "config.cfg"
-
-
-def read_config(filename: str = "config.cfg"):
-    config = ConfigParser()
-    config_path = get_config_path()
-
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            config.read_file(f)
-        return config
-    except UnicodeDecodeError:
-        # Fallback if the file was saved in legacy Windows encoding
-        with config_path.open("r", encoding="cp1252") as f:
-            config.read_file(f)
-        return config
-
-
-def _decode_body(body: str) -> str:
-    return (body or "").replace("\\n", "\n")
-
-
-def _encode_body(body: str) -> str:
-    body = (body or "").rstrip()  # Remove trailing newlines to avoid confusion
-    return body.replace("\r\n", "\n").replace("\n", "\\n")
 
 
 def load_template_config(path: str | Path) -> tuple[str, str]:
@@ -94,3 +83,12 @@ def save_template_config(path: str | Path, subject: str, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         conf.write(f, space_around_delimiters=False)
+
+
+def _decode_body(body: str) -> str:
+    return (body or "").replace("\\n", "\n")
+
+
+def _encode_body(body: str) -> str:
+    body = (body or "").rstrip()
+    return body.replace("\r\n", "\n").replace("\n", "\\n")
