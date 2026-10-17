@@ -69,6 +69,26 @@ def test_excel_engine_for_rejects_unknown_suffix():
         _extractor()._excel_engine_for("clients.csv")
 
 
+def test_apartment_letter_is_stored_as_key(monkeypatch, tmp_path):
+    path = tmp_path / "clients.xlsx"
+    path.write_bytes(b"PK")
+
+    def fake_read_excel(p, engine=None, **kwargs):
+        return pd.DataFrame(
+            {
+                "klient_mail": ["a@example.com"],
+                "korter": ["44 a"],
+                "yhistu": ["Rännaku pst"],
+                "maj_nr": ["16"],
+            }
+        )
+
+    monkeypatch.setattr("src.clients_extractor.pd.read_excel", fake_read_excel)
+    persons = _extractor().extract(path)
+    assert persons[0].apartment == "44A"
+    assert persons[0].apartment_key() == "44A"
+
+
 def test_xlsx_read_uses_openpyxl(monkeypatch, tmp_path):
     path = tmp_path / "clients.xlsx"
     path.write_bytes(b"PK")

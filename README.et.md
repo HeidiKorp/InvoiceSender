@@ -11,11 +11,13 @@ In English: [README.md](README.md)
    - Kommunaalarved: PDF
    - Küttearved: Excel (`.xls`, `.xlsx`)
    - Kliendid: Excel (`.xls`, `.xlsx`, `.xlsm`)
-3. Arved tükeldakse ja seotakse klientidega **korteri numbri järgi**. Edenemisriba näitab, et töö käib. Korterid, millel arve puudub, või arved, millel klienti ei ole, jäetakse kõrvale ja kuvatakse viga.
-4. Sobitatud arved salvestatakse kausta `arved/<aadress>/<periood>/` arvete faili kõrvale (iga korteri kohta `{korter}.pdf`).
+3. Arved tükeldakse ja seotakse klientidega **korteri numbri järgi**. Edenemisriba näitab, et töö käib. Kommunaalarvete lehti ei nimetata ümber, et numbrid oleksid järjest. Ühe- või kahekohaline lünk arvete numbriseerias on ainult hoiatus (`Arvete järjestuses puuduvad numbrid`); see ei tähenda, et päris korteril arve puuduks. Tühi lugem, tagurpidi number või keset jada hüpe kuvatakse kui `Kontrolli üle arved`. Korterid, millel arve puudub, või arved, millel klienti ei ole, jäetakse kõrvale ja kuvatakse viga.
+4. Sobitatud arved salvestatakse kausta `arved/<aadress>/<periood>/` arvete faili kõrvale (iga korteri kohta `{korter}.pdf`). Kui sama korter loetakse ühe käivituse jooksul mitmelt kommunaalarve lehelt, jääb esimene leht failina `{korter}.pdf` ja seda saab endiselt meilida; järgmised salvestatakse kui `{korter}-kontrolli.pdf`, seejärel `{korter}-kontrolli-2.pdf` jne, koos teatega, et need failinimed tuleb üle kontrollida. Sama perioodi uuesti töötlemine võib need failid asendada. Kommunaalarve leht, millelt korteri numbrit ei loeta, salvestatakse samasse kausta failina `nimetu-1.pdf`, seejärel `nimetu-2.pdf` ja nii edasi. Nimeta fail ümber korteri numbriks (näiteks `57.pdf`). See korter kuvatakse endiselt real `Puuduvad arved korteritele`.
 5. Avane meilimalli aken. Vaikimisi teema on `{address} arve {period} {year}`, näiteks `Õismäe tee 48 arve august 2026`. `{period}` peab olema eesti kuu nimi ja `{year}` aasta 2001–2999; kui ühe arve lehelt neid ei loeta, võetakse andmed teistelt sama faili arvetelt. Teemat ja sisu saab muuta ning malli `.cfg` failina laadida või salvestada.
 6. Outlookis (peab olema paigaldatud ja sisse logitud) luuakse mustandid kategooriaga `ArveteSaatja`, vastava(te) kliendi meiliaadressi(de)ga ja korteri PDF manuses. Kui ühel kliendireal on mitu aadressi, saab igaüks oma mustandi. Outlookis peaks avanema kaust **Mustandid**.
 7. **Saada mustandid** saadab ainult selle kategooria mustandid.
+
+**Avalehele** tühjendab arvete tüübi ja mõlemad failid ning viib tagasi esimesele kuvale, et saaks töödelda järgmist komplekti. Kui arvete lugemine või mustandite koostamine veel käib, küsib programm enne katkestamist.
 
 Vea korral naaseb aken eelmisesse kasutatavasse olekusse (failivalikud jäävad alles; katkestamine taastab ooteriba). Ootamatud vead kirjutatakse faili `utils/error.log` (või `.exe` kõrvale, kui programm on pakendatud), koos kellaaja, tegevuse ja veateatega.
 
@@ -48,13 +50,21 @@ rm -rf build dist *.spec
 pyinstaller --onedir --noconsole --name ArveteSaatja --paths . --add-data "tesseract:tesseract" --add-data "config.cfg:." run_app.py
 ```
 
+## Testid
+
+Paigalda `pytest` ja käivita projektikaustast:
+
+```
+python -m pytest test
+```
+
 ### Sammud programmis
 
 1. Ava programm.
 2. Vali arvete tüüp — **Kommunaalarved** või **Küttearved**.
 3. Vali arvete fail (PDF kommunaali, Excel kütte puhul) ja klientide fail. Valitud faili tee kuvatakse nupu kõrval.
-4. Vajuta **Koosta meilid**. Töötlemist saab peatada nupuga **Katkesta**.
-5. Iga korteri arve salvestatakse kausta `arvete_faili_kaust/arved/aadress/periood`.
+4. Vajuta **Koosta meilid**. Töötlemist saab peatada nupuga **Katkesta**. **Avalehele** (peaaknas ja meiliaknas) tühjendab vormi; kui töö veel käib, küsib programm enne katkestamist kinnitust.
+5. Iga korteri arve salvestatakse kausta `arvete_faili_kaust/arved/aadress/periood`. Kui kommunaalarve lehelt korteri numbrit ei loeta, salvestatakse see samasse kausta nimega `nimetu-1.pdf`. Nimeta fail ise ümber korteri numbriks. Korter jääb teatesse `Puuduvad arved korteritele`.
 6. Soovi korral saab selle perioodi kausta kustutada nupuga **Kustuta arvekaust** (kustutatakse ainult selle perioodi kaust, mitte kogu maja kaust).
 7. Kontrolli meili teemat ja sisu. Kõikidele korteritele läheb sama teema ja sisu. Kui kõik sobib, vajuta **Salvesta** — programm avab Outlooki ja koostab mustandid.
    - Teemat ja sisu saab muuta aknas ja salvestada.
@@ -66,7 +76,7 @@ pyinstaller --onedir --noconsole --name ArveteSaatja --paths . --add-data "tesse
 
 Nõutavad veerud: `klient_mail`, `korter`, `yhistu`, `maj_nr`.
 
-- `korter` peab sisaldama ainult numbreid
+- `korter` võib olla number ja üks täht (`44`, `44 a`, `44A`). Täht salvestatakse kujul `44A`.
 - `klient_mail` on kohustuslik; ühel real võib olla mitu aadressi, eraldatud `,` või `;` märgiga
 
 Sobitamine käib ainult korteri numbri järgi, mitte meiliaadressi ega tänava järgi.

@@ -4,13 +4,12 @@ import re, unicodedata
 from email.utils import parseaddr
 
 from utils.file_utils import get_field
-from src.data_classes import Person, ValidationError
+from src.data_classes import Person, ValidationError, apartment_identity, normalize_apartment_key
 
 LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
 DOMAIN_RE = re.compile(
     r"^(?=.{1,255}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
 )
-RE_NUM = re.compile(r"^\d+$")
 SUPPORTED_CLIENT_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
 REQUIRED_COLUMNS = {"klient_mail", "korter", "yhistu", "maj_nr"}
 
@@ -80,13 +79,15 @@ class ClientsExtractor:
         maj_nr = get_field(row, "maj_nr")
         address = f"{yhistu.lower()}, {maj_nr}".strip()
 
-        if not RE_NUM.match(apt):
-            raise ValidationError(f"Rida {row_num}: korter peab sisaldama ainult numbreid")
+        if apartment_identity(apt) is None:
+            raise ValidationError(
+                f"Rida {row_num}: korter peab olema number või number ja üks täht"
+            )
         if not email:
             raise ValidationError(f"Rida {row_num}: meiliaadress on kohustuslik")
 
         self.split_emails(email)
-        return email, apt, address
+        return email, normalize_apartment_key(apt), address
 
     def _read_workbook(self, path):
         engine = self._excel_engine_for(path)

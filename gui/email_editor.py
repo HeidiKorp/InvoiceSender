@@ -9,6 +9,7 @@ import traceback
 from utils.logging_helper import log_exception
 from utils.config_helpers import load_template_config, save_template_config
 from utils.gui_helpers import center_window
+from src.email_sender import OutlookDialogOpen, OutlookDraftsSavedDialogOpen
 from src.invoice_batch import InvoiceBatch
 
 
@@ -20,6 +21,7 @@ class EmailEditor:
         parent.btn_cancel.configure(state=DISABLED)
 
         self.window = tb.Toplevel(parent)
+        parent.email_editor = self
         self.window.title("Muuda meili malli")
         self.window.transient(parent)
         self.window.grab_set()
@@ -55,8 +57,10 @@ class EmailEditor:
         self.batch.subject = subject
         self.batch.body = body
         self._close()
-        self._show_saving_ui()
-        self._run_outlook_job()
+        token = self.parent.begin_job()
+        self.parent.cancel_event.clear()
+        self._show_saving_ui(token)
+        self._run_outlook_job(token)
 
     def _save_template(self) -> None:
         subject, body = self._current_values()
@@ -133,7 +137,7 @@ class EmailEditor:
             self.body_text.get("1.0", "end-1c").strip(),
         )
 
-    def _show_saving_ui(self) -> None:
+    def _show_saving_ui(self, token: int) -> None:
         def ui():
             try:
                 self.parent.status_bar.pack(fill=X, side=BOTTOM)
@@ -144,9 +148,9 @@ class EmailEditor:
                 pass
             self.parent.update_idletasks()
 
-        self.parent.after(0, ui)
+        self.parent.post_job_ui(token, ui)
 
-    def _run_outlook_job(self) -> None:
+    def _run_outlook_job(self, token: int) -> None:
         parent = self.parent
         batch = self.batch
 
@@ -154,17 +158,38 @@ class EmailEditor:
             pythoncom.CoInitialize()
             try:
                 batch.create_drafts()
-                parent.after(0, parent.on_emails_saved)
-                parent.after(
-                    0, lambda: parent.status_label.configure(text="Mustandid loodud")
+                if batch.cancel_event.is_set():
+                    return
+
+                def saved():
+                    parent.on_emails_saved()
+                    parent.status_label.configure(text="Mustandid loodud")
+
+                parent.post_job_ui(token, saved)
+            except OutlookDraftsSavedDialogOpen as error:
+                log_exception(error, operation="outlook_drafts")
+                message = str(error)
+
+                def saved_with_warning(message=message):
+                    parent.on_emails_saved()
+                    parent.status_label.configure(text="Mustandid loodud")
+                    messagebox.showwarning("Outlook", message)
+
+                parent.post_job_ui(token, saved_with_warning)
+            except OutlookDialogOpen as error:
+                log_exception(error, operation="outlook_drafts")
+                message = str(error)
+                parent.post_job_ui(
+                    token,
+                    lambda message=message: messagebox.showerror("Outlook", message),
                 )
-            except Exception as e:
-                log_exception(e, operation="outlook_drafts")
+            except Exception as error:
+                log_exception(error, operation="outlook_drafts")
                 traceback_str = traceback.format_exc()
-                parent.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "Viga", f"{e}\n\n{traceback_str}"
+                parent.post_job_ui(
+                    token,
+                    lambda error=error, traceback_str=traceback_str: messagebox.showerror(
+                        "Viga", f"{error}\n\n{traceback_str}"
                     ),
                 )
             finally:
@@ -176,17 +201,29 @@ class EmailEditor:
                         parent.page_progress.configure(mode="determinate", value=0)
                     except Exception:
                         pass
+                    if parent.home_requested(token):
+                        parent.finish_home_reset(token, close_outlook=True)
+                        return
+                    parent.end_job(token)
 
                 parent.after(0, cleanup)
 
         threading.Thread(target=job, daemon=True).start()
 
+    def _go_home(self) -> None:
+        self.parent.after(0, self.parent.go_home)
+
     def _close(self) -> None:
+        if getattr(self.parent, "email_editor", None) is self:
+            self.parent.email_editor = None
         try:
             self.window.grab_release()
         except Exception:
             pass
-        self.window.destroy()
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
 
     def _create_subject_section(self, parent, subject):
         subject_var = tb.StringVar(value=subject)
@@ -262,6 +299,13 @@ class EmailEditor:
             text="Tühista",
             bootstyle=SECONDARY,
             command=self._cancel,
+            width=12,
+        ).pack(side=LEFT, padx=(0, 12), ipady=6)
+        tb.Button(
+            btns_frame,
+            text="Avalehele",
+            bootstyle=SECONDARY,
+            command=self._go_home,
             width=12,
         ).pack(side=LEFT, padx=(0, 12), ipady=6)
         tb.Button(

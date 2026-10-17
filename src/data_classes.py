@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+import re
 import string
 
 ESTONIAN_MONTHS = {
@@ -48,6 +49,27 @@ def is_valid_address(address: str | None) -> bool:
     return bool(address and str(address).strip())
 
 
+_APARTMENT_KEY_RE = re.compile(r"^(\d+)\s*([A-Za-z])?$")
+
+
+def apartment_identity(apartment: str) -> tuple[int, str] | None:
+    match = _APARTMENT_KEY_RE.fullmatch(str(apartment or "").strip())
+    if not match:
+        return None
+    return int(match.group(1)), (match.group(2) or "").upper()
+
+
+def normalize_apartment_key(apartment: str) -> str:
+    text = str(apartment or "").strip()
+    match = _APARTMENT_KEY_RE.fullmatch(text)
+    if not match:
+        return text
+    number, letter = match.group(1), match.group(2)
+    if letter:
+        return f"{number}{letter.upper()}"
+    return number
+
+
 @dataclass
 class Person:
     apartment: str
@@ -55,7 +77,7 @@ class Person:
     emails: list[str] = field(default_factory=list)
 
     def apartment_key(self) -> str:
-        return str(self.apartment).strip()
+        return normalize_apartment_key(self.apartment)
 
     def invoice_pdf_path(self, invoices_dir: str | Path) -> str | None:
         path = Path(invoices_dir) / f"{self.apartment_key()}.pdf"
@@ -71,9 +93,10 @@ class InvoiceItem:
     ky_name: Optional[str] = None
     pdf_page: Optional[object] = None
     excel_sheet_name: Optional[str] = None
+    needs_review: bool = False
 
     def apartment_key(self) -> str:
-        return str(self.apartment).strip()
+        return normalize_apartment_key(self.apartment)
 
     def template_context(self) -> dict[str, str]:
         return {

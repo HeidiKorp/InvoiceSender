@@ -5,7 +5,12 @@ from tkinter import messagebox
 import threading
 import pytesseract
 
-from src.email_sender import clear_outlook_cache, send_drafts
+from src.email_sender import (
+    OutlookDialogOpen,
+    clear_outlook_cache,
+    close_opened_outlook_windows,
+    send_drafts,
+)
 from utils.logging_helper import log_exc_triple, delete_old_error_log
 from utils.file_utils import delete_folder
 from utils.config_helpers import (
@@ -29,6 +34,10 @@ class MainWindow(tb.Window):
         self.title(app_name)
         self.resizable(True, True)
         self.cancel_event = threading.Event()
+        self._busy = False
+        self._job_token = 0
+        self._home_token = None
+        self.email_editor = None
         self.invoice_types = invoice_types
         self.type_hint = type_hint
         self.content_type_var = tb.StringVar(value="")
@@ -38,6 +47,7 @@ class MainWindow(tb.Window):
         self._configure_styles()
         self._build_ui(version)
         self._apply_content_type_gate()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _setup_exception_handler(self):
         def tk_report_callback_exception(exc_type, exc_value, exc_tb):
@@ -208,6 +218,13 @@ class MainWindow(tb.Window):
         )
         self.btn_cancel.pack(side=LEFT, padx=(12, 6), pady=12)
         self.btn_cancel.configure(state=DISABLED)
+        self.btn_home = tb.Button(
+            bottom_bar,
+            text="Avalehele",
+            bootstyle=SECONDARY,
+            command=self.go_home,
+        )
+        self.btn_home.pack(side=LEFT, padx=(6, 12), pady=12)
         return bottom_bar
 
     def _create_status_bar(self):
@@ -270,7 +287,7 @@ class MainWindow(tb.Window):
             parent,
             text="Saada mustandid",
             bootstyle=SUCCESS,
-            command=lambda: send_drafts(self),
+            command=self._send_drafts,
         )
         self._send_drafts_packed = False
 
@@ -293,6 +310,139 @@ class MainWindow(tb.Window):
 
         self.on_emails_saved = on_emails_saved
         self.hide_send_drafts_button = hide_send_drafts_button
+
+    def _send_drafts(self):
+        try:
+            send_drafts(self)
+        except OutlookDialogOpen as error:
+            log_exc_triple(
+                type(error), error, error.__traceback__, operation="outlook_send_draft"
+            )
+            messagebox.showwarning("Outlook", str(error))
+
+    def _on_close(self):
+        for child in list(self.winfo_children()):
+            if isinstance(child, tk.Toplevel):
+                try:
+                    child.destroy()
+                except Exception as error:
+                    log_exc_triple(
+                        type(error),
+                        error,
+                        error.__traceback__,
+                        operation="close_child_window",
+                    )
+        try:
+            close_opened_outlook_windows()
+        except Exception as error:
+            log_exc_triple(
+                type(error),
+                error,
+                error.__traceback__,
+                operation="outlook_close_on_exit",
+            )
+        self.destroy()
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def begin_job(self) -> int:
+        self._job_token += 1
+        self._busy = True
+        self._home_token = None
+        return self._job_token
+
+    def current_job_token(self) -> int:
+        return self._job_token
+
+    def end_job(self, token: int) -> None:
+        if self._job_token != token or self._home_token == token:
+            return
+        self._busy = False
+
+    def job_ui_active(self, token: int) -> bool:
+        return self._job_token == token and self._home_token != token
+
+    def home_requested(self, token: int) -> bool:
+        return self._home_token == token
+
+    def post_job_ui(self, token: int, action) -> None:
+        def run(action=action):
+            if self.job_ui_active(token):
+                action()
+
+        self.after(0, run)
+
+    def go_home(self) -> None:
+        if self._busy:
+            if self._home_token == self._job_token:
+                return
+            if not messagebox.askyesno(
+                "Avalehele",
+                "Töö on pooleli. Kas katkestada ja minna avalehele?",
+            ):
+                return
+            self._home_token = self._job_token
+            self.cancel_event.set()
+            return
+        self._reset_to_initial_screen()
+
+    def finish_home_reset(self, token: int, *, close_outlook: bool = False) -> None:
+        if self._home_token != token:
+            return
+        warning = None
+        if close_outlook:
+            warning = self._warning_after_closing_outlook()
+        self._reset_to_initial_screen()
+        if warning:
+            messagebox.showwarning("Outlook", warning)
+
+    def _warning_after_closing_outlook(self) -> str | None:
+        try:
+            close_opened_outlook_windows()
+        except OutlookDialogOpen as error:
+            return str(error)
+        except Exception as error:
+            log_exc_triple(
+                type(error),
+                error,
+                error.__traceback__,
+                operation="outlook_close_on_home",
+            )
+        return None
+
+    def _reset_to_initial_screen(self) -> None:
+        self._close_email_editor()
+        self._busy = False
+        self._home_token = None
+        self._job_token += 1
+        self.cancel_event.clear()
+        self.content_type_var.set("")
+        self.invoice_var.set("")
+        self.clients_var.set("")
+        self.btn_text_invoice.set("Vali arvete fail")
+        self.btn_text_clients.set("Vali klientide fail")
+        self._apply_content_type_gate()
+        self.hide_delete_button()
+        self.hide_send_drafts_button()
+        self.btn_cancel.configure(state=DISABLED)
+        try:
+            self.page_progress.stop()
+        except Exception:
+            pass
+        self.page_progress.configure(mode="determinate", value=0)
+        self.status_label.configure(text="Valmis")
+        try:
+            self.status_bar.pack_forget()
+        except Exception:
+            pass
+
+    def _close_email_editor(self) -> None:
+        editor = self.email_editor
+        if editor is None:
+            return
+        self.email_editor = None
+        editor._close()
 
     def _apply_content_type_gate(self):
         key = self.content_type_var.get()

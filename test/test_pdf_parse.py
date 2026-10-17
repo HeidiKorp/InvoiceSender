@@ -13,6 +13,9 @@ from src.pdf_extractor import (
     extract_year,
     has_reasonable_apartment_digits,
     pick_address_and_apt,
+    review_apartment_sequence,
+    saved_invoice_stems,
+    small_apartment_gaps,
     strip_address_prefix,
 )
 
@@ -72,7 +75,7 @@ def test_invalid_carried_period_is_replaced():
         ]
     )
     result = extract_address_period_apartment(
-        text, prev_apt=4, period="periood", year="99"
+        text, period="periood", year="99"
     )
     assert result["period"] == "august"
     assert result["year"] == "2026"
@@ -84,6 +87,117 @@ def test_pick_address_prefers_address_line_with_street_token():
         "Viitenumber 12345",
         "Muu rida 12-99",
     ]
-    address, apartment = pick_address_and_apt(rows, prev_apt=4)
+    address, apartment = pick_address_and_apt(rows)
     assert "48" in address
     assert str(apartment).startswith("5")
+
+
+def test_lettered_apartment_stays_on_the_address_line():
+    for line, expected in (
+        ("Aadress: Rännaku pst 16-44 a", "44A"),
+        ("Aadress: Rännaku pst 16-44a", "44A"),
+        ("Aadress: Rännaku pst 16-44A", "44A"),
+        ("Aadress: Rännaku pst 16-53 a", "53A"),
+    ):
+        address, apartment = pick_address_and_apt([line])
+        assert "16" in address
+        assert apartment == expected
+
+
+def test_review_keeps_consecutive_apartments():
+    assert review_apartment_sequence(["1", "2", "3"]) == [
+        ("1", False),
+        ("2", False),
+        ("3", False),
+    ]
+
+
+def test_review_keeps_forward_gap_without_review():
+    assert review_apartment_sequence(["1", "2", "4"]) == [
+        ("1", False),
+        ("2", False),
+        ("4", False),
+    ]
+
+
+def test_review_keeps_gap_when_the_sequence_continues():
+    assert review_apartment_sequence(["1", "2", "4", "5"]) == [
+        ("1", False),
+        ("2", False),
+        ("4", False),
+        ("5", False),
+    ]
+
+
+def test_review_keeps_same_number_with_a_letter():
+    assert review_apartment_sequence(["44", "44 a", "45"]) == [
+        ("44", False),
+        ("44A", False),
+        ("45", False),
+    ]
+    assert review_apartment_sequence(["51", "52", "52A", "53"]) == [
+        ("51", False),
+        ("52", False),
+        ("52A", False),
+        ("53", False),
+    ]
+
+
+def test_review_flags_only_a_mid_sequence_spike():
+    assert review_apartment_sequence(["51", "52", "86", "54", "55"]) == [
+        ("51", False),
+        ("52", False),
+        ("86", True),
+        ("54", False),
+        ("55", False),
+    ]
+
+
+def test_review_keeps_a_large_number_at_the_end():
+    assert review_apartment_sequence(["56", "58", "148"]) == [
+        ("56", False),
+        ("58", False),
+        ("148", False),
+    ]
+    assert small_apartment_gaps(["56", "58", "148"]) == ["57"]
+
+
+def test_small_holes_list_one_or_two_missing_numbers():
+    assert small_apartment_gaps(["53A", "55", "56", "58", "148"]) == ["54", "57"]
+
+
+def test_small_or_backwards_reads_stay_as_read():
+    assert review_apartment_sequence(["47", "4"]) == [("47", False), ("4", True)]
+    assert review_apartment_sequence(["63", "6"]) == [("63", False), ("6", True)]
+    assert review_apartment_sequence(["63", "64"]) == [("63", False), ("64", False)]
+    assert review_apartment_sequence([""]) == [("", True)]
+
+
+def test_unreadable_pages_are_named_nimetu_and_suspicious_numbers_keep_theirs():
+    apartments = ["56", "", "??", "58", "47", "4"]
+    assert review_apartment_sequence(apartments)[-1] == ("4", True)
+    assert saved_invoice_stems(apartments) == [
+        "56",
+        "nimetu-1",
+        "nimetu-2",
+        "58",
+        "47",
+        "4",
+    ]
+
+
+def test_saved_invoice_stems_disambiguate_repeated_apartments():
+    assert saved_invoice_stems(["56", "56", "58"]) == [
+        "56",
+        "56-kontrolli",
+        "58",
+    ]
+    assert saved_invoice_stems(["56", "56", "56"]) == [
+        "56",
+        "56-kontrolli",
+        "56-kontrolli-2",
+    ]
+
+
+def test_small_holes_ignore_kontrolli_suffix_on_duplicate_stems():
+    assert small_apartment_gaps(["56", "56-kontrolli", "58"]) == ["57"]

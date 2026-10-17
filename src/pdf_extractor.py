@@ -5,7 +5,13 @@ import gc, fitz, logging, sys, os
 import pytesseract
 import json
 
-from src.data_classes import ValidationError, is_valid_period, is_valid_year
+from src.data_classes import (
+    ValidationError,
+    apartment_identity,
+    is_valid_period,
+    is_valid_year,
+    normalize_apartment_key,
+)
 from utils.logging_helper import log_exception
 from utils.ocr_helper import (
     check_tesseract_lang,
@@ -45,6 +51,13 @@ logging.basicConfig(
 )
 
 
+UNNAMED_INVOICE_PREFIX = "nimetu"
+RECHECK_INVOICE_SUFFIX = "kontrolli"
+_RECHECK_STEM_RE = re.compile(
+    rf"^(.+)-{RECHECK_INVOICE_SUFFIX}(?:-(\d+))?$"
+)
+
+
 class PdfInvoiceExtractor:
     def load(self, pdf_path, on_progress=None, cancel_event=None) -> list[InvoiceItem]:
         return separate_invoices(
@@ -53,12 +66,48 @@ class PdfInvoiceExtractor:
 
     def save(self, invoice_batch, on_progress=None):
         dest = invoice_batch.dest_dir
-        for invoice in invoice_batch.invoices:
+        stems = saved_invoice_stems(
+            [invoice.apartment for invoice in invoice_batch.invoices]
+        )
+        for invoice, stem in zip(invoice_batch.invoices, stems):
+            invoice.apartment = stem
             writer = PdfWriter()
             writer.add_page(invoice.pdf_page)
-            with open(dest / f"{invoice.apartment}.pdf", "wb") as f:
+            with open(dest / f"{stem}.pdf", "wb") as f:
                 writer.write(f)
         return dest
+
+
+def apartment_key_from_saved_stem(stem: str) -> str:
+    match = _RECHECK_STEM_RE.match(stem)
+    if match:
+        return match.group(1)
+    return stem
+
+
+def is_recheck_invoice_stem(stem: str) -> bool:
+    return _RECHECK_STEM_RE.match(stem) is not None
+
+
+def saved_invoice_stems(apartments: list[str]) -> list[str]:
+    stems: list[str] = []
+    unnamed_count = 0
+    seen_by_apartment: dict[str, int] = {}
+    for apartment in apartments:
+        if apartment_identity(apartment) is None:
+            unnamed_count += 1
+            stems.append(f"{UNNAMED_INVOICE_PREFIX}-{unnamed_count}")
+            continue
+        base = normalize_apartment_key(apartment)
+        prior = seen_by_apartment.get(base, 0)
+        seen_by_apartment[base] = prior + 1
+        if prior == 0:
+            stems.append(base)
+        elif prior == 1:
+            stems.append(f"{base}-{RECHECK_INVOICE_SUFFIX}")
+        else:
+            stems.append(f"{base}-{RECHECK_INVOICE_SUFFIX}-{prior}")
+    return stems
 
 
 def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
@@ -78,18 +127,14 @@ def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
         )
 
     invoices: list[InvoiceItem] = []
-    prev_apt: int | None = None
     period, year = None, None
 
     for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        invoice = _parse_invoice_page(page, text, idx, pdf_path, prev_apt, period, year)
+        invoice = _parse_invoice_page(page, text, idx, pdf_path, period, year)
         period = invoice.period
         year = invoice.year
         invoices.append(invoice)
-        try:
-            prev_apt = apartment_numeric_part(str(invoice.apartment)) or prev_apt
-        except ValueError:
-            pass
+    _apply_apartment_review(invoices)
     return invoices
 
 
@@ -135,10 +180,10 @@ def ocr_pdf_all_pages(
     return texts
 
 
-def extract_address_period_apartment(text, prev_apt, period=None, year=None):
+def extract_address_period_apartment(text, period=None, year=None):
     rows = text.splitlines()
 
-    address, apartment = pick_address_and_apt(rows, prev_apt)
+    address, apartment = pick_address_and_apt(rows)
     if not address or not apartment:
         _log_weak_address_parse(rows, address, apartment)
 
@@ -151,8 +196,8 @@ def extract_address_period_apartment(text, prev_apt, period=None, year=None):
     return {"address": address, "apartment": apartment, "period": period, "year": year}
 
 
-def pick_address_and_apt(rows: list[str], prev_apt: int | None) -> tuple[str, str]:
-    address_block = find_best_address_block(rows, prev_apt)
+def pick_address_and_apt(rows: list[str]) -> tuple[str, str]:
+    address_block = find_best_address_block(rows)
 
     address_candidate = None
     if address_block:
@@ -160,7 +205,7 @@ def pick_address_and_apt(rows: list[str], prev_apt: int | None) -> tuple[str, st
         address_candidate = parse_house_apartment_from_row(address_payload) or parse_house_apartment_from_loose(address_payload)
 
     expected_house = choose_expected_house(rows, address_candidate)
-    best_candidate = find_best_house_apartment_candidate(rows, prev_apt, expected_house)
+    best_candidate = find_best_house_apartment_candidate(rows, expected_house)
 
     if best_candidate and not address_candidate:
         return format_address(best_candidate), best_candidate["apartment"]
@@ -265,7 +310,7 @@ def _should_include_next_row(keyword: str, next_row: str) -> bool:
     return keyword in {"periood", "kuupäev"}
 
 
-def find_best_address_block(rows: list[str], prev_apt: int | None = None) -> str | None:
+def find_best_address_block(rows: list[str]) -> str | None:
     best_row_text = None
     best_score = -10_000
 
@@ -289,16 +334,6 @@ def find_best_address_block(rows: list[str], prev_apt: int | None = None) -> str
         if house_value.isdigit() and int(house_value) >= 300:
             score -= 8
 
-        apartment_int = apartment_numeric_part(parsed.get("apartment", ""))
-        if prev_apt is not None and apartment_int is not None:
-            jump = apartment_int - prev_apt
-            if 0 <= jump <= 3:
-                score += 12
-            elif jump > 10:
-                score -= 8
-            elif jump < 0:
-                score -= 12
-
         if score > best_score:
             best_score = score
             best_row_text = normalized_row
@@ -308,11 +343,10 @@ def find_best_address_block(rows: list[str], prev_apt: int | None = None) -> str
 
 def find_best_house_apartment_candidate(
     rows: list[str],
-    previous_apartment: int | None,
     expected_house: str | None,
 ) -> dict | None:
     parsed_candidates = _iter_parsed_candidates(rows)
-    return _pick_best_candidate(parsed_candidates, previous_apartment, expected_house)
+    return _pick_best_candidate(parsed_candidates, expected_house)
 
 
 def choose_expected_house(rows: list[str], address_candidate: dict | None) -> str | None:
@@ -449,7 +483,7 @@ def strip_address_prefix(address_block: str) -> str:
 
 
 def score_candidate_row(
-    row_text: str, parsed: dict, previous_apt: int | None, expected_house: str | None
+    row_text: str, parsed: dict, expected_house: str | None
 ) -> int:
     score = 0
 
@@ -472,18 +506,6 @@ def score_candidate_row(
 
     if _looks_like_date_pair(parsed.get("house", ""), parsed.get("apartment", "")):
         score -= 15
-
-    if previous_apt is not None and numeric_part is not None:
-        jump = numeric_part - previous_apt
-
-        if 0 <= jump <= 3:
-            score += 12
-
-        if jump > 10:
-            score -= 8
-
-        if jump < 0:
-            score -= 12
 
     return score
 
@@ -511,8 +533,110 @@ def contains_street_token(street_text: str) -> bool:
 
 
 def apartment_numeric_part(apartment_value: str) -> int | None:
-    match = re.match(r"^\s*(\d+)", apartment_value)
+    match = re.match(r"^\s*(\d+)", apartment_value or "")
     return int(match.group(1)) if match else None
+
+
+SMALL_APARTMENT_GAP = 2
+
+
+def review_apartment_sequence(apartments: list[str]) -> list[tuple[str, bool]]:
+    # (apartment number, letter) or None when the text is not a plain apartment.
+    parsed_apartments = [apartment_identity(apartment) for apartment in apartments]
+    # One pair per page: normalized apartment text, and whether the operator should check it.
+    review_marks: list[tuple[str, bool]] = []
+    last_accepted: tuple[int, str] | None = None
+    for index, apartment in enumerate(apartments):
+        parsed = parsed_apartments[index]
+        text = normalize_apartment_key(apartment)
+        if parsed is None:
+            review_marks.append((text, True))
+            continue
+        if last_accepted is None:
+            review_marks.append((text, False))
+            last_accepted = parsed
+            continue
+        number = parsed[0]
+        last_number = last_accepted[0]
+        if number < last_number:
+            review_marks.append((text, True))
+            continue
+        next_parsed = (
+            parsed_apartments[index + 1] if index + 1 < len(parsed_apartments) else None
+        )
+        # A large jump is a misread when the next page returns to the earlier run.
+        # last_accepted stays put, so later apartments are not compared with the jump.
+        if _is_mid_sequence_spike(last_accepted, parsed, next_parsed):
+            review_marks.append((text, True))
+            continue
+        review_marks.append((text, False))
+        if _moves_last_accepted_forward(last_accepted, parsed):
+            last_accepted = parsed
+    return review_marks
+
+
+def small_apartment_gaps(apartments: list[str]) -> list[str]:
+    parsed_apartments = [
+        apartment_identity(apartment_key_from_saved_stem(apartment))
+        for apartment in apartments
+    ]
+    gaps: list[str] = []
+    seen_numbers: set[str] = set()
+    # Compare each apartment with the next one in page order.
+    for previous, current in zip(parsed_apartments, parsed_apartments[1:]):
+        # Skip unreadable text, and a number that goes backwards.
+        if previous is None or current is None or current[0] < previous[0]:
+            continue
+        missing_count = current[0] - previous[0] - 1
+        # Only holes of one or two numbers; a bigger jump is not listed here.
+        if not 1 <= missing_count <= SMALL_APARTMENT_GAP:
+            continue
+        # Each missing number between this pair, once.
+        for number in range(previous[0] + 1, current[0]):
+            label = str(number)
+            if label in seen_numbers:
+                continue
+            seen_numbers.add(label)
+            gaps.append(label)
+    return gaps
+
+
+def _apply_apartment_review(invoices: list[InvoiceItem]) -> None:
+    review_marks = review_apartment_sequence(
+        [invoice.apartment or "" for invoice in invoices]
+    )
+    for invoice, (apartment, needs_review) in zip(invoices, review_marks):
+        invoice.apartment = apartment
+        invoice.needs_review = needs_review
+
+
+def _is_mid_sequence_spike(
+    last_accepted: tuple[int, str],
+    current: tuple[int, str],
+    next_parsed: tuple[int, str] | None,
+) -> bool:
+    if next_parsed is None:
+        return False
+    if current[0] - last_accepted[0] - 1 <= SMALL_APARTMENT_GAP:
+        return False
+    return _continues_run(last_accepted, next_parsed) and not _continues_run(current, next_parsed)
+
+
+def _continues_run(earlier: tuple[int, str], candidate: tuple[int, str]) -> bool:
+    if candidate[0] == earlier[0]:
+        return earlier[1] == "" and candidate[1] != ""
+    missing = candidate[0] - earlier[0] - 1
+    return 0 <= missing <= SMALL_APARTMENT_GAP
+
+
+def _moves_last_accepted_forward(
+    last_accepted: tuple[int, str], parsed: tuple[int, str]
+) -> bool:
+    last_number, last_letter = last_accepted
+    number, letter = parsed
+    if number > last_number:
+        return True
+    return number == last_number and last_letter == "" and letter != ""
 
 
 def has_reasonable_apartment_digits(apartment_value: str) -> bool:
@@ -541,13 +665,22 @@ def save_debug_data(entry):
             f.write(str(entry))
         f.write("\n\n---\n\n")
 
+# DEBUG_PAGES = {2, 4, 28, 46} 
 
 def _parse_invoice_page(
-    page, text: str, page_number: int, pdf_path: str, prev_apt, period=None, year=None
-) -> dict:
+    page, text: str, page_number: int, pdf_path: str, period=None, year=None
+) -> InvoiceItem:
     _validate_page_text(text, page_number, pdf_path)
-    client_data = extract_address_period_apartment(text, prev_apt, period, year)
+    client_data = extract_address_period_apartment(text, period, year)
     ky_name = extract_ky_name_from_text(text)
+
+    # if page_number in DEBUG_PAGES:
+    #     save_debug_data({
+    #         "page": page_number,
+    #         "pdf": pdf_path,
+    #         "ocr_text": text,
+    #         "parsed": {**client_data, "ky_name": ky_name},
+    #     })
 
     return InvoiceItem(
         pdf_page=page,
@@ -630,7 +763,6 @@ def _iter_parsed_candidates(rows: list[str]) -> list[dict]:
 
 def _pick_best_candidate(
     parsed_candidates: list[dict],
-    previous_apartment: int | None,
     expected_house: str | None,
 ) -> dict | None:
     best_candidate = None
@@ -638,7 +770,7 @@ def _pick_best_candidate(
 
     for candidate in parsed_candidates:
         candidate_score = score_candidate_row(
-            candidate["row_text"], candidate, previous_apartment, expected_house
+            candidate["row_text"], candidate, expected_house
         )
 
         if _is_better_candidate(candidate, candidate_score, best_candidate, best_score):
@@ -704,6 +836,5 @@ def _norm_row(row: str) -> str:
 def _norm_apartment(apartment_nr: str, apartment_suffix: str | None) -> str:
     if not apartment_nr:
         return ""
-    if apartment_suffix:
-        return f"{apartment_nr}{apartment_suffix.upper()}"
-    return apartment_nr
+    combined = f"{apartment_nr}{apartment_suffix}" if apartment_suffix else apartment_nr
+    return normalize_apartment_key(combined)

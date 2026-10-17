@@ -15,6 +15,8 @@ REFIT_REGEX = r"(\d+)x(\d+)\+(\d+)\+(\d+)"
 
 
 def get_data_ready(parent, invoice_var, clients_var, template_root, content_type_var):
+    if parent.is_busy():
+        return
     invoice_type = get_selected_invoice_type(parent)
     if invoice_type is None:
         return
@@ -97,6 +99,7 @@ def validate_and_prepare_ui(parent, invoice_var, clients_var):
     parent.status_bar.pack(fill=X, side=BOTTOM)
     refit_window(parent)
     parent.cancel_event.clear()
+    parent.begin_job()
     parent.btn_cancel.configure(state=NORMAL)
     parent.update_idletasks()
     return invoice_path, clients_path
@@ -121,13 +124,16 @@ def start_processing_thread(target, *args):
 
 
 def worker(parent, invoice_type, invoice_path, clients_path):
+    token = parent.current_job_token()
     try:
         fname = os.path.basename(invoice_path)
-        parent.after(0, lambda: parent.status_bar.pack(fill=X, side=BOTTOM))
-        parent.after(0, lambda: parent.status_label.configure(text="Alustan..."))
-        parent.after(
-            0, lambda: parent.page_progress.configure(value=0, mode="determinate")
-        )
+
+        def show_start():
+            parent.status_bar.pack(fill=X, side=BOTTOM)
+            parent.status_label.configure(text="Alustan...")
+            parent.page_progress.configure(value=0, mode="determinate")
+
+        parent.post_job_ui(token, show_start)
 
         batch = InvoiceBatch(
             invoice_path=invoice_path,
@@ -145,11 +151,11 @@ def worker(parent, invoice_type, invoice_path, clients_path):
                 text = message or (
                     f"Loen {page_number}/{total_pages} - {fname}"
                 )
-                on_task_progress_ui(parent, page_number, total_pages, text)
+                on_task_progress_ui(parent, token, page_number, total_pages, text)
 
             batch.load_invoices(on_progress=on_progress)
             if parent.cancel_event.is_set():
-                parent.after(0, lambda: on_cancel_ui(parent))
+                parent.post_job_ui(token, lambda: on_cancel_ui(parent))
                 return
 
             batch.apply_email_templates()
@@ -159,22 +165,28 @@ def worker(parent, invoice_type, invoice_path, clients_path):
             pythoncom.CoUninitialize()
 
         if parent.cancel_event.is_set():
-            parent.after(0, lambda: on_cancel_ui(parent))
+            parent.post_job_ui(token, lambda: on_cancel_ui(parent))
             return
 
-        parent.after(0, lambda: finalize_after_saved(parent, batch))
+        parent.post_job_ui(token, lambda: finalize_after_saved(parent, batch))
     except Exception as e:
-        _handle_worker_error(parent, e)
+        _handle_worker_error(parent, token, e)
     finally:
 
         def cleanup():
+            if parent.home_requested(token):
+                parent.finish_home_reset(token)
+                return
+            if not parent.job_ui_active(token):
+                return
             parent.page_progress.configure(value=0, mode="determinate")
             parent.btn_cancel.configure(state=DISABLED)
+            parent.end_job(token)
 
         parent.after(0, cleanup)
 
 
-def on_task_progress_ui(parent, page_number, total_pages, message):
+def on_task_progress_ui(parent, token, page_number, total_pages, message):
     pct = int(page_number / total_pages * HUNDRED_PERCENT) if total_pages else 0
 
     def apply():
@@ -186,7 +198,7 @@ def on_task_progress_ui(parent, page_number, total_pages, message):
         parent.status_label.configure(text=message)
         parent.update_idletasks()
 
-    parent.after(0, apply)
+    parent.post_job_ui(token, apply)
 
 
 def finalize_after_saved(parent, batch: InvoiceBatch):
@@ -233,16 +245,18 @@ def _invoice_file_extension(key):
     return [("Kõik failid", "*.*")]
 
 
-def _handle_worker_error(parent, err):
+def _handle_worker_error(parent, token, err):
     if isinstance(err, Cancelled):
-        parent.after(0, lambda: on_cancel_ui(parent))
+        parent.post_job_ui(token, lambda: on_cancel_ui(parent))
         log_exception(Cancelled("Operation cancelled by user."), operation="cancelled")
     elif isinstance(err, ValidationError):
-        parent.after(0, lambda err=err: messagebox.showerror("Viga", str(err)))
+        parent.post_job_ui(
+            token, lambda err=err: messagebox.showerror("Viga", str(err))
+        )
         log_exception(err, operation="validation")
     else:
-        parent.after(
-            0,
+        parent.post_job_ui(
+            token,
             lambda err=err: messagebox.showerror("Viga", f"Töö ebaõnnestus:\n{err}"),
         )
         log_exception(err, operation="worker")

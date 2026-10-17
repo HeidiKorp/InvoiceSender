@@ -11,11 +11,13 @@ Desktop app for sending apartment invoices by email. It splits a combined invoic
    - Kommunaal invoices: PDF
    - Küte invoices: Excel (`.xls`, `.xlsx`)
    - Clients: Excel (`.xls`, `.xlsx`, `.xlsm`)
-3. Invoices are split and matched to clients **by apartment number**. A progress bar shows work in progress. Apartments with no invoice, or invoices with no client, are dropped and an error is shown.
-4. Matched invoices are saved under `arved/<address>/<period>/` next to the invoice file (one `{apartment}.pdf` per apartment).
+3. Invoices are split and matched to clients **by apartment number**. A progress bar shows work in progress. Kommunaal pages are not renamed to stay consecutive. A one- or two-number gap in the invoice sequence is only a warning (`Arvete järjestuses puuduvad numbrid`); that does not mean a real apartment is missing its invoice. An empty read, a number that goes backwards, or a mid-sequence spike is listed as `Kontrolli üle arved`. Apartments with no invoice, or invoices with no client, are dropped and an error is shown.
+4. Matched invoices are saved under `arved/<address>/<period>/` next to the invoice file (one `{apartment}.pdf` per apartment). If the same apartment is read from more than one kommunaal page in one run, the first page keeps `{apartment}.pdf` and can still be emailed; later pages are saved as `{apartment}-kontrolli.pdf`, then `{apartment}-kontrolli-2.pdf`, and so on, with a message to recheck those filenames. Re-running the same period may replace those files. A kommunaal page with no readable apartment number is saved in that same folder as `nimetu-1.pdf`, then `nimetu-2.pdf`, and so on. Rename the file to the apartment number (for example `57.pdf`). That apartment is still listed under `Puuduvad arved korteritele`.
 5. An email template editor opens. Default subject is `{address} arve {period} {year}`, for example `Õismäe tee 48 arve august 2026`. `{period}` must be an Estonian month name and `{year}` a year from 2001 to 2999; if one invoice page parses those poorly, other invoices in the same file are used. You can edit subject and body, and load or save a `.cfg` template.
 6. Drafts are created in Outlook (must be installed and logged in) with category `ArveteSaatja`, the matching client email(s), and the apartment PDF attached. Several emails on the same client row all get a draft. Outlook should show the **Drafts** folder.
 7. **Saada mustandid** sends only drafts in that category.
+
+**Avalehele** clears the invoice type and both files and returns to the first screen, so another set can be processed. If reading invoices or creating drafts is still running, the app asks before cancelling.
 
 On error, the UI returns to the previous usable state (inputs stay selected; cancel restores the idle bar). Unexpected failures are written to `utils/error.log` (next to the exe when frozen), with timestamp, operation, and traceback.
 
@@ -46,11 +48,19 @@ rm -rf build dist *.spec
 pyinstaller --onedir --noconsole --name ArveteSaatja --paths . --add-data "tesseract:tesseract" --add-data "config.cfg:." run_app.py
 ```
 
+## Tests
+
+Install `pytest`, then from the project root:
+
+```
+python -m pytest test
+```
+
 ## Clients file
 
 Required columns: `klient_mail`, `korter`, `yhistu`, `maj_nr`.
 
-- `korter` must be digits only
+- `korter` may be digits plus one letter (`44`, `44 a`, `44A`). A letter is stored as `44A`.
 - `klient_mail` is required; several addresses on one row may be separated by `,` or `;`
 
 Matching is by apartment number only, not by email or street address.

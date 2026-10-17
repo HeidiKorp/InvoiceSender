@@ -11,6 +11,8 @@ from src.data_classes import (
     InvoiceType,
     Person,
     ValidationError,
+    apartment_identity,
+    normalize_apartment_key,
 )
 from src.clients_extractor import ClientsExtractor
 from utils.file_utils import create_invoice_dir
@@ -74,8 +76,21 @@ class InvoiceBatch:
         return self.dest_dir
 
     def match_apartments(self) -> list[str]:
-        matched, problems = self._pair_persons(self._apartments_from_invoice_items())
+        matched, problems = self._pair_persons(
+            self._apartments_from_invoice_items(), self._review_apartments()
+        )
         self.persons = matched
+        holes = self._small_apartment_gaps()
+        if holes:
+            problems.append(
+                f"Arvete järjestuses puuduvad numbrid: {', '.join(holes)}.\n"
+            )
+        unnamed = self._unnamed_invoice_problem()
+        if unnamed:
+            problems.append(unnamed)
+        recheck = self._recheck_duplicate_invoice_problem()
+        if recheck:
+            problems.append(recheck)
         return problems
 
     def match_against_saved_pdfs(
@@ -145,7 +160,9 @@ class InvoiceBatch:
             return ExcelInvoiceExtractor()
         raise ValidationError(f"Tundmatu arve tüüp: {self.invoice_type_key}")
 
-    def _pair_persons(self, invoice_counts: Counter) -> tuple[list[Person], list[str]]:
+    def _pair_persons(
+        self, invoice_counts: Counter, review: list[str] | None = None
+    ) -> tuple[list[Person], list[str]]:
         person_apts = self._apartments_from_persons()
         invoice_apts = set(invoice_counts.keys())
 
@@ -155,7 +172,9 @@ class InvoiceBatch:
             [apt for apt, count in invoice_counts.items() if count > 1], key=str
         )
 
-        problems = self._build_validation_errors(missing, extra, duplicates)
+        problems = self._build_validation_errors(
+            missing, extra, duplicates, review or []
+        )
         excluded_apts = set(missing) | set(duplicates)
         matched_persons = [
             person
@@ -165,26 +184,91 @@ class InvoiceBatch:
         ]
         return matched_persons, problems
 
+    def _small_apartment_gaps(self) -> list[str]:
+        from src.pdf_extractor import small_apartment_gaps
+
+        return small_apartment_gaps(
+            [invoice.apartment for invoice in self.invoices]
+        )
+
+    def _review_apartments(self) -> list[str]:
+        keys = []
+        for invoice in self.invoices:
+            if not invoice.needs_review:
+                continue
+            key = invoice.apartment_key()
+            if apartment_identity(key) is None:
+                continue
+            keys.append(key)
+        return keys
+
+    def _unnamed_invoice_problem(self) -> str | None:
+        filenames = self._unnamed_invoice_filenames()
+        if not filenames:
+            return None
+        listed = ", ".join(filenames)
+        return (
+            "Korteri numbrit ei õnnestunud lugeda. "
+            f"Nimeta fail ise ümber korteri numbriks: {listed}.\n"
+        )
+
+    def _unnamed_invoice_filenames(self) -> list[str]:
+        from src.pdf_extractor import UNNAMED_INVOICE_PREFIX
+
+        prefix = f"{UNNAMED_INVOICE_PREFIX}-"
+        filenames = []
+        for invoice in self.invoices:
+            key = invoice.apartment_key()
+            if apartment_identity(key) is not None or not key.startswith(prefix):
+                continue
+            filenames.append(f"{key}.pdf")
+        return filenames
+
+    def _recheck_duplicate_invoice_problem(self) -> str | None:
+        filenames = self._recheck_duplicate_invoice_filenames()
+        if not filenames:
+            return None
+        listed = ", ".join(filenames)
+        return (
+            "Sama korteri number loeti mitu korda. "
+            f"Kontrolli faili nimi üle: {listed}.\n"
+        )
+
+    def _recheck_duplicate_invoice_filenames(self) -> list[str]:
+        from src.pdf_extractor import is_recheck_invoice_stem
+
+        filenames = []
+        for invoice in self.invoices:
+            key = invoice.apartment_key()
+            if not is_recheck_invoice_stem(key):
+                continue
+            filenames.append(f"{key}.pdf")
+        return filenames
+
     def _apartments_from_persons(self) -> set[str]:
         return {person.apartment_key() for person in self.persons if person.apartment_key()}
 
     def _apartments_from_invoice_items(self) -> Counter:
-        return Counter(
-            invoice.apartment_key()
-            for invoice in self.invoices
-            if invoice.apartment_key()
-        )
+        keys = []
+        for invoice in self.invoices:
+            key = invoice.apartment_key()
+            if apartment_identity(key) is None:
+                continue
+            keys.append(key)
+        return Counter(keys)
 
     def _apartments_from_invoice_files(self, invoices_dir) -> Counter:
         counts = Counter()
         for path in Path(invoices_dir).iterdir():
             if path.is_file() and path.suffix.lower() in INVOICE_FILE_EXTENSIONS:
-                apt = path.stem.strip()
+                apt = normalize_apartment_key(path.stem.strip())
                 if apt:
                     counts[apt] += 1
         return counts
 
-    def _build_validation_errors(self, missing, extra, duplicates) -> list[str]:
+    def _build_validation_errors(
+        self, missing, extra, duplicates, review=()
+    ) -> list[str]:
         problems = []
         if missing:
             problems.append(f"Puuduvad arved korteritele: {', '.join(missing)}.\n")
@@ -194,4 +278,6 @@ class InvoiceBatch:
             problems.append(
                 f"Duplikaatsed arvefailid korteritele: {', '.join(duplicates)}.\n"
             )
+        if review:
+            problems.append(f"Kontrolli üle arved: {', '.join(review)}.\n")
         return problems

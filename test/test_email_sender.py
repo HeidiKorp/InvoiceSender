@@ -72,11 +72,14 @@ def test_apartments_from_invoice_files_counts_pdf_stems(tmp_path):
 
 def test_build_validation_errors_includes_each_mismatch_type():
     persons = [_person("3")]
-    batch = _batch(persons, [_invoice("9"), _invoice("1"), _invoice("1")])
+    batch = _batch(persons, [_invoice("9"), _invoice("1"), _invoice("1-kontrolli")])
     problems = batch.match_apartments()
     assert "Puuduvad arved korteritele: 3.\n" in problems
     assert "Arved, millele ei leitud klienti: 1, 9.\n" in problems
-    assert "Duplikaatsed arvefailid korteritele: 1.\n" in problems
+    assert (
+        "Sama korteri number loeti mitu korda. "
+        "Kontrolli faili nimi üle: 1-kontrolli.pdf.\n"
+    ) in problems
 
 
 def test_build_validation_errors_empty_when_all_match():
@@ -120,12 +123,34 @@ def test_missing_person_and_extra_invoice_are_both_excluded():
     assert "Arved, millele ei leitud klienti: 9.\n" in problems
 
 
-def test_duplicate_invoice_apartment_is_reported_and_excluded():
+def test_duplicate_invoice_apartment_keeps_first_and_lists_recheck_stem():
     persons = [_person("1"), _person("2")]
-    batch = _batch(persons, [_invoice("1"), _invoice("1"), _invoice("2")])
+    batch = _batch(
+        persons, [_invoice("1"), _invoice("1-kontrolli"), _invoice("2")]
+    )
     problems = batch.match_apartments()
-    assert batch.persons == [persons[1]]
-    assert "Duplikaatsed arvefailid korteritele: 1.\n" in problems
+    assert batch.persons == persons
+    assert "Duplikaatsed arvefailid korteritele: 1.\n" not in problems
+    assert (
+        "Sama korteri number loeti mitu korda. "
+        "Kontrolli faili nimi üle: 1-kontrolli.pdf.\n"
+    ) in problems
+
+
+def test_duplicate_stems_still_warn_missing_apartment_in_sequence():
+    persons = [_person("56"), _person("57"), _person("58")]
+    batch = _batch(
+        persons,
+        [_invoice("56"), _invoice("56-kontrolli"), _invoice("58")],
+    )
+    problems = batch.match_apartments()
+    assert [person.apartment for person in batch.persons] == ["56", "58"]
+    assert "Arvete järjestuses puuduvad numbrid: 57.\n" in problems
+    assert "Puuduvad arved korteritele: 57.\n" in problems
+    assert (
+        "Sama korteri number loeti mitu korda. "
+        "Kontrolli faili nimi üle: 56-kontrolli.pdf.\n"
+    ) in problems
 
 
 def test_person_invoice_pdf_path_only_when_file_exists(tmp_path):
@@ -186,6 +211,64 @@ def test_apply_email_templates_uses_other_invoice_when_first_period_invalid():
     batch = _batch([_person("1"), _person("2")], [first, second])
     batch.apply_email_templates()
     assert batch.subject == "Õismäe tee 48 arve august 2026"
+
+
+def test_small_holes_are_warned_and_existing_invoices_still_match():
+    persons = [_person("56"), _person("58"), _person("148"), _person("57")]
+    invoices = [_invoice("56"), _invoice("58"), _invoice("148")]
+    batch = _batch(persons, invoices)
+    problems = batch.match_apartments()
+    assert "Arvete järjestuses puuduvad numbrid: 57.\n" in problems
+    assert "Puuduvad arved korteritele: 57.\n" in problems
+    assert [person.apartment for person in batch.persons] == ["56", "58", "148"]
+
+
+def test_lettered_apartment_keys_match():
+    persons = [_person("44 a")]
+    batch = _batch(persons, [_invoice("44A")])
+    assert batch.match_apartments() == []
+    assert batch.persons[0].apartment_key() == "44A"
+
+
+def test_unreadable_invoice_file_asks_for_a_rename():
+    unnamed = _invoice("nimetu-1")
+    unnamed.needs_review = True
+    reviewed = _invoice("4")
+    reviewed.needs_review = True
+    persons = [_person("56"), _person("57"), _person("58"), _person("4")]
+    batch = _batch(persons, [_invoice("56"), _invoice("58"), unnamed, reviewed])
+    problems = batch.match_apartments()
+    assert "Puuduvad arved korteritele: 57.\n" in problems
+    assert "Kontrolli üle arved: 4.\n" in problems
+    assert (
+        "Korteri numbrit ei õnnestunud lugeda. "
+        "Nimeta fail ise ümber korteri numbriks: nimetu-1.pdf.\n"
+    ) in problems
+    assert not any("ei leitud klienti" in problem for problem in problems)
+    assert [person.apartment for person in batch.persons] == ["56", "58", "4"]
+
+
+def test_two_unreadable_invoices_are_listed_together():
+    batch = _batch(
+        [_person("1")],
+        [_invoice("1"), _invoice("nimetu-1"), _invoice("nimetu-2")],
+    )
+    problems = batch.match_apartments()
+    assert (
+        "Korteri numbrit ei õnnestunud lugeda. "
+        "Nimeta fail ise ümber korteri numbriks: nimetu-1.pdf, nimetu-2.pdf.\n"
+    ) in problems
+    assert not any("ei leitud klienti" in problem for problem in problems)
+
+
+def test_review_apartments_are_reported_and_not_excluded():
+    reviewed = _invoice("48")
+    reviewed.needs_review = True
+    persons = [_person("1"), _person("48")]
+    batch = _batch(persons, [_invoice("1"), reviewed])
+    problems = batch.match_apartments()
+    assert "Kontrolli üle arved: 48.\n" in problems
+    assert [person.apartment for person in batch.persons] == ["1", "48"]
 
 
 def test_apply_email_templates_raises_when_no_valid_period():
