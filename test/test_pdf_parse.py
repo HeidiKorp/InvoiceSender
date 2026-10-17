@@ -6,8 +6,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data_classes import is_valid_period, is_valid_year
+from pypdf import PdfReader
+
 from src.pdf_extractor import (
     _looks_like_date_pair,
+    embedded_page_text_trustworthy,
     extract_address_period_apartment,
     extract_period,
     extract_year,
@@ -18,6 +21,8 @@ from src.pdf_extractor import (
     small_apartment_gaps,
     strip_address_prefix,
 )
+
+S43_OKT_PDF = ROOT / "data" / "okt test data" / "S43 okt 26.pdf"
 
 
 def test_strip_address_prefix_without_colon():
@@ -201,3 +206,43 @@ def test_saved_invoice_stems_disambiguate_repeated_apartments():
 
 def test_small_holes_ignore_kontrolli_suffix_on_duplicate_stems():
     assert small_apartment_gaps(["56", "56-kontrolli", "58"]) == ["57"]
+
+
+def test_embedded_text_trustworthy_accepts_clean_address_line():
+    text = "\n".join(
+        [
+            "Aadress: Sütiste tee 43-48",
+            "Arve periood oktoober 2026",
+        ]
+    )
+    assert embedded_page_text_trustworthy(text) is True
+
+
+def test_embedded_text_trustworthy_rejects_empty_and_merged_periood_line():
+    assert embedded_page_text_trustworthy("") is False
+    assert embedded_page_text_trustworthy("   ") is False
+    merged = "Aadress: Sütiste tee 43-13-18 Palur periood oktoober 2026"
+    assert embedded_page_text_trustworthy(merged) is False
+
+
+def test_embedded_text_trustworthy_rejects_misread_house_apartment():
+    text = "Aadress: Õismäe tee 1413-1541"
+    assert embedded_page_text_trustworthy(text) is False
+
+
+def test_embedded_text_trustworthy_accepts_lettered_apartment():
+    line = "Aadress: Rännaku pst 16-44 a"
+    text = "\n".join([line, "Arve periood august 2026"])
+    assert embedded_page_text_trustworthy(text) is True
+    parsed = extract_address_period_apartment(text)
+    assert parsed["apartment"] == "44A"
+
+
+def test_s43_page_48_embedded_text_reads_apartment_48_not_48a():
+    if not S43_OKT_PDF.is_file():
+        return
+    reader = PdfReader(S43_OKT_PDF)
+    text = (reader.pages[47].extract_text() or "").strip()
+    assert embedded_page_text_trustworthy(text) is True
+    parsed = extract_address_period_apartment(text)
+    assert parsed["apartment"] == "48"

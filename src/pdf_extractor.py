@@ -57,12 +57,18 @@ _RECHECK_STEM_RE = re.compile(
     rf"^(.+)-{RECHECK_INVOICE_SUFFIX}(?:-(\d+))?$"
 )
 
+_OCR_LANG = "est"
+_OCR_DPI = 300
+_OCR_PSM = 6
+_OCR_OEM = 1
+_OCR_TIMEOUT_SEC = 120
+
 
 class PdfInvoiceExtractor:
     def load(self, pdf_path, on_progress=None, cancel_event=None) -> list[InvoiceItem]:
-        return separate_invoices(
+        return PdfInvoiceSeparator(
             pdf_path, on_progress=on_progress, cancel_flag=cancel_event
-        )
+        ).run()
 
     def save(self, invoice_batch, on_progress=None):
         dest = invoice_batch.dest_dir
@@ -76,6 +82,128 @@ class PdfInvoiceExtractor:
             with open(dest / f"{stem}.pdf", "wb") as f:
                 writer.write(f)
         return dest
+
+
+class PdfInvoiceSeparator:
+    """Split one kommunaal PDF into per-page invoices (text layer or OCR per page)."""
+
+    def __init__(self, pdf_path: str, on_progress=None, cancel_flag=None):
+        self.pdf_path = pdf_path
+        self.on_progress = on_progress
+        self.cancel_flag = cancel_flag
+        self.period: str | None = None
+        self.year: str | None = None
+        self._ocr_config: str | None = None
+        scale = _OCR_DPI / 72
+        self._ocr_matrix = fitz.Matrix(scale, scale)
+
+    def run(self) -> list[InvoiceItem]:
+        reader = PdfReader(self.pdf_path)
+        total_pages = len(reader.pages)
+        invoices: list[InvoiceItem] = []
+
+        with fitz.open(self.pdf_path) as doc:
+            for page_index in range(total_pages):
+                if self._is_cancelled():
+                    self._log_cancelled()
+                    break
+                invoice = self._process_page(reader, doc, page_index, total_pages)
+                if invoice is None:
+                    break
+                self._update_period_year(invoice)
+                invoices.append(invoice)
+            gc.collect()
+
+        _apply_apartment_review(invoices)
+        return invoices
+
+    def _process_page(
+        self, reader: PdfReader, doc: fitz.Document, page_index: int, total_pages: int
+    ) -> InvoiceItem | None:
+        page_idx = page_index + 1
+        page = reader.pages[page_index]
+        text = self._resolve_page_text(page, doc, page_index, page_idx, total_pages)
+        if text is None:
+            return None
+        return _parse_invoice_page(
+            page, text, page_idx, self.pdf_path, self.period, self.year
+        )
+
+    def _resolve_page_text(
+        self,
+        page,
+        doc: fitz.Document,
+        page_index: int,
+        page_idx: int,
+        total_pages: int,
+    ) -> str | None:
+        embedded = self._embedded_text(page)
+        if embedded_page_text_trustworthy(embedded, self.period, self.year):
+            self._log_text_layer_page(page_idx, total_pages)
+            self._notify_progress(page_idx, total_pages)
+            return embedded
+        return self._ocr_page_text(doc, page_index, page_idx)
+
+    def _embedded_text(self, page) -> str:
+        return (page.extract_text() or "").strip()
+
+    def _ocr_page_text(
+        self, doc: fitz.Document, page_index: int, page_idx: int
+    ) -> str | None:
+        ocr_config = self._ensure_ocr_ready()
+        text = _ocr_single_page(
+            doc[page_index],
+            page_idx,
+            doc,
+            self.pdf_path,
+            _OCR_LANG,
+            ocr_config,
+            self._ocr_matrix,
+            _OCR_TIMEOUT_SEC,
+            self.on_progress,
+            self.cancel_flag,
+        )
+        if text is None and self._is_cancelled():
+            self._log_cancelled()
+        return text
+
+    def _ensure_ocr_ready(self) -> str:
+        if self._ocr_config is not None:
+            return self._ocr_config
+        logging.info(
+            "Using tesseract_cmd=%s", pytesseract.pytesseract.tesseract_cmd
+        )
+        check_tesseract_lang(_OCR_LANG)
+        self._ocr_config = f"--oem {_OCR_OEM} --psm {_OCR_PSM}"
+        return self._ocr_config
+
+    def _update_period_year(self, invoice: InvoiceItem) -> None:
+        self.period = invoice.period
+        self.year = invoice.year
+
+    def _is_cancelled(self) -> bool:
+        return bool(self.cancel_flag and self.cancel_flag.is_set())
+
+    def _log_cancelled(self) -> None:
+        logging.info("OCR process cancelled by user.")
+
+    def _log_text_layer_page(self, page_idx: int, total_pages: int) -> None:
+        logging.info(
+            "Using PDF text layer for page %s/%s of '%s'",
+            page_idx,
+            total_pages,
+            self.pdf_path,
+        )
+
+    def _notify_progress(self, page_idx: int, total_pages: int) -> None:
+        if not self.on_progress:
+            return
+        try:
+            self.on_progress(page_idx, total_pages)
+        except Exception:
+            logging.debug(
+                "on_progress callback raised an exception:", exc_info=True
+            )
 
 
 def apartment_key_from_saved_stem(stem: str) -> str:
@@ -111,31 +239,9 @@ def saved_invoice_stems(apartments: list[str]) -> list[str]:
 
 
 def separate_invoices(pdf_path, on_progress=None, cancel_flag=None):
-    if on_progress:
-        page_texts = ocr_pdf_all_pages(
-            pdf_path, "est", dpi=300, on_progress=on_progress, cancel_flag=cancel_flag
-        )
-    else:
-        page_texts = ocr_pdf_all_pages(
-            pdf_path, "est", dpi=300, cancel_flag=cancel_flag
-        )
-    reader = PdfReader(pdf_path)
-
-    if len(page_texts) != len(reader.pages) and not cancel_flag:
-        raise ValidationError(
-            f"PDF faili '{pdf_path}' OCR-tulemus on ebajärjekindel (lehtede arv ei klapi)."
-        )
-
-    invoices: list[InvoiceItem] = []
-    period, year = None, None
-
-    for idx, (page, text) in enumerate(zip(reader.pages, page_texts), start=1):
-        invoice = _parse_invoice_page(page, text, idx, pdf_path, period, year)
-        period = invoice.period
-        year = invoice.year
-        invoices.append(invoice)
-    _apply_apartment_review(invoices)
-    return invoices
+    return PdfInvoiceSeparator(
+        pdf_path, on_progress=on_progress, cancel_flag=cancel_flag
+    ).run()
 
 
 def ocr_pdf_all_pages(
@@ -308,6 +414,42 @@ def _should_include_next_row(keyword: str, next_row: str) -> bool:
     if keyword == "aadress":
         return re.search(r"\d", next_row) is not None
     return keyword in {"periood", "kuupäev"}
+
+
+def embedded_page_text_trustworthy(
+    text: str, period: str | None = None, year: str | None = None
+) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+
+    rows = stripped.splitlines()
+    address_block = find_best_address_block(rows)
+    if not address_block:
+        return False
+
+    if re.search(r"periood", address_block, re.IGNORECASE):
+        return False
+
+    address_payload = strip_address_prefix(address_block)
+    parsed = (
+        parse_house_apartment_from_row(address_payload)
+        or parse_house_apartment_from_loose(address_payload)
+    )
+    if not parsed or not parsed.get("has_street"):
+        return False
+
+    house_value = parsed.get("house", "")
+    if house_value.isdigit() and int(house_value) >= 300:
+        return False
+
+    if not has_reasonable_apartment_digits(parsed.get("apartment", "")):
+        return False
+
+    client_data = extract_address_period_apartment(stripped, period, year)
+    address = (client_data.get("address") or "").strip()
+    apartment = (client_data.get("apartment") or "").strip()
+    return bool(address and apartment)
 
 
 def find_best_address_block(rows: list[str]) -> str | None:

@@ -8,7 +8,7 @@ In English: [README.md](README.md)
 
 1. Vali arvete tüüp: **Kommunaalarved** või **Küttearved**. Tüüp määrab peamiselt meili teema ja sisu malli.
 2. Vali arvete fail ja klientide fail.
-   - Kommunaalarved: PDF
+   - Kommunaalarved: PDF (valitava tekstiga eksport arveldussüsteemist loetakse otse — kiirem ja täpsem; skaneeritud PDF-id töötavad endiselt OCR-iga)
    - Küttearved: Excel (`.xls`, `.xlsx`)
    - Kliendid: Excel (`.xls`, `.xlsx`, `.xlsm`)
 3. Arved tükeldakse ja seotakse klientidega **korteri numbri järgi**. Edenemisriba näitab, et töö käib. Kommunaalarvete lehti ei nimetata ümber, et numbrid oleksid järjest. Ühe- või kahekohaline lünk arvete numbriseerias on ainult hoiatus (`Arvete järjestuses puuduvad numbrid`); see ei tähenda, et päris korteril arve puuduks. Tühi lugem, tagurpidi number või keset jada hüpe kuvatakse kui `Kontrolli üle arved`. Korterid, millel arve puudub, või arved, millel klienti ei ole, jäetakse kõrvale ja kuvatakse viga.
@@ -25,7 +25,7 @@ Vea korral naaseb aken eelmisesse kasutatavasse olekusse (failivalikud jäävad 
 
 - Windows
 - Classic Outlook, sisse logitud
-- Tesseract OCR eesti keele andmetega (`est`) — vajalik kommunaal-PDF-ide jaoks
+- Tesseract OCR eesti keele andmetega (`est`) — vajalik kommunaal-PDF-ide lehtedele, millel pole kasutatavat sisseehitatud teksti
 - Excel — vajalik küttearvete jaoks
 - Python 3 ja projekti teegid (`pandas`, `openpyxl` `.xlsx`/`.xlsm` klientide jaoks, `xlrd` `.xls` jaoks, `pytesseract`, `pypdf`, PyMuPDF, `pywin32`, `ttkbootstrap`)
 

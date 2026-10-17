@@ -8,7 +8,7 @@ Desktop app for sending apartment invoices by email. It splits a combined invoic
 
 1. Choose invoice type: **Kommunaalarved** or **Küttearved**. The type mainly sets the email subject and body templates.
 2. Choose the invoice file and the clients file.
-   - Kommunaal invoices: PDF
+   - Kommunaal invoices: PDF (pages with selectable text from your billing system are read directly and are faster and more accurate; scan-only PDFs still work via OCR)
    - Küte invoices: Excel (`.xls`, `.xlsx`)
    - Clients: Excel (`.xls`, `.xlsx`, `.xlsm`)
 3. Invoices are split and matched to clients **by apartment number**. A progress bar shows work in progress. Kommunaal pages are not renamed to stay consecutive. A one- or two-number gap in the invoice sequence is only a warning (`Arvete järjestuses puuduvad numbrid`); that does not mean a real apartment is missing its invoice. An empty read, a number that goes backwards, or a mid-sequence spike is listed as `Kontrolli üle arved`. Apartments with no invoice, or invoices with no client, are dropped and an error is shown.
@@ -25,7 +25,7 @@ On error, the UI returns to the previous usable state (inputs stay selected; can
 
 - Windows
 - Classic Outlook, signed in
-- Tesseract OCR with Estonian language data (`est`) — used for kommunaal PDFs
+- Tesseract OCR with Estonian language data (`est`) — used for kommunaal PDFs when a page has no usable embedded text
 - Excel — used for küte invoices
 - Python 3, plus project dependencies (`pandas`, `openpyxl` for `.xlsx`/`.xlsm` clients, `xlrd` for `.xls`, `pytesseract`, `pypdf`, PyMuPDF, `pywin32`, `ttkbootstrap`)
 
